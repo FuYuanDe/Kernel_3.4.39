@@ -1,0 +1,4 @@
+config SUNXI_PCM
+	tristate "sunxi pcm driver"
+	---help---
+	  sunxi pcm driver

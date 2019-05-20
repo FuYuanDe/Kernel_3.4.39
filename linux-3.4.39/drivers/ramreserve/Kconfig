@@ -1,0 +1,4 @@
+config RAMRESERVE
+	tristate "ramreserve driver support"
+	help
+	  ramreserve driver support

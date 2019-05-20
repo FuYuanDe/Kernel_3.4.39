@@ -1,0 +1,4 @@
+config SUNXI_RTL8367
+	tristate "rtl8367 driver"
+	---help---
+          rtl8367 driver
