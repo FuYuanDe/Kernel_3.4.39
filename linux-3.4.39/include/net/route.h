@@ -82,6 +82,8 @@ static inline bool rt_is_output_route(const struct rtable *rt)
 	return rt->rt_route_iif == 0;
 }
 
+//路由统计数据
+//包括输入输出报文数和字节数
 struct ip_rt_acct {
 	__u32 	o_bytes;
 	__u32 	o_packets;
@@ -170,6 +172,7 @@ static inline struct rtable *ip_route_output_gre(struct net *net, struct flowi4 
 extern int ip_route_input_common(struct sk_buff *skb, __be32 dst, __be32 src,
 				 u8 tos, struct net_device *devin, bool noref);
 
+//这个函数用的是false
 static inline int ip_route_input(struct sk_buff *skb, __be32 dst, __be32 src,
 				 u8 tos, struct net_device *devin)
 {

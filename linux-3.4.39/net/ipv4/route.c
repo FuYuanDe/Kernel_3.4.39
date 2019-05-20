@@ -835,8 +835,10 @@ static int has_noalias(const struct rtable *head, const struct rtable *rth)
 	return ONE;
 }
 
+//gc回收检查
 static void rt_check_expire(void)
 {
+	//rover巡视
 	static unsigned int rover;
 	unsigned int i = rover, goal;
 	struct rtable *rth;
@@ -861,8 +863,9 @@ static void rt_check_expire(void)
 		i = (i + 1) & rt_hash_mask;
 		rthp = &rt_hash_table[i].chain;
 
+		//防止运行时间过长
 		if (need_resched())
-			cond_resched();
+			cond_resched();//让出CPU
 
 		samples++;
 
@@ -873,11 +876,14 @@ static void rt_check_expire(void)
 		while ((rth = rcu_dereference_protected(*rthp,
 					lockdep_is_held(rt_hash_lock_addr(i)))) != NULL) {
 			prefetch(rth->dst.rt_next);
+			//这个函数就简单检查下标志位是否有一致，不一致则表示过期
 			if (rt_is_expired(rth)) {
 				*rthp = rth->dst.rt_next;
+				//释放路由缓存
 				rt_free(rth);
 				continue;
 			}
+			
 			if (rth->dst.expires) {
 				/* Entry is expired even if it is in use */
 				if (time_before_eq(jiffies, rth->dst.expires)) {
@@ -1786,6 +1792,7 @@ static void ip_rt_update_pmtu(struct dst_entry *dst, u32 mtu)
 
 static void ipv4_validate_peer(struct rtable *rt)
 {
+	//创建缓存的时候该值如何初始化--> end
 	if (rt->rt_peer_genid != rt_peer_genid()) {
 		struct inet_peer *peer;
 
@@ -2276,16 +2283,19 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	   by fib_lookup.
 	 */
 
+	//检查源地址
 	if (ipv4_is_multicast(saddr) || ipv4_is_lbcast(saddr) ||
 	    ipv4_is_loopback(saddr))
 		goto martian_source;
-
+	
+	//检查目的地址
 	if (ipv4_is_lbcast(daddr) || (saddr == 0 && daddr == 0))
 		goto brd_input;
 
 	/* Accept zero addresses only to limited broadcast;
 	 * I even do not know to fix it or not. Waiting for complains :-)
 	 */
+	//检查源地址
 	if (ipv4_is_zeronet(saddr))
 		goto martian_source;
 
@@ -2295,6 +2305,7 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	/*
 	 *	Now we are ready to route packet.
 	 */
+	//输入报文的oif设置成0 
 	fl4.flowi4_oif = 0;
 	fl4.flowi4_iif = dev->ifindex;
 	fl4.flowi4_mark = skb->mark;
@@ -2302,6 +2313,8 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	fl4.flowi4_scope = RT_SCOPE_UNIVERSE;
 	fl4.daddr = daddr;
 	fl4.saddr = saddr;
+
+	//查找路由表
 	err = fib_lookup(net, &fl4, &res);
 	if (err != 0) {
 		if (!IN_DEV_FORWARD(in_dev))
@@ -2390,6 +2403,8 @@ local_input:
 		rth->dst.error= -err;
 		rth->rt_flags 	&= ~RTCF_LOCAL;
 	}
+
+	//缓存处理
 	hash = rt_hash(daddr, saddr, fl4.flowi4_iif, rt_genid(net));
 	rth = rt_intern_hash(hash, rth, skb, fl4.flowi4_iif);
 	err = 0;
@@ -2452,6 +2467,8 @@ int ip_route_input_common(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		goto skip_cache;
 
 	tos &= IPTOS_RT_MASK;
+
+	//输入hash值的计算由src、dst、iif和随机量组成
 	hash = rt_hash(daddr, saddr, iif, rt_genid(net));
 
     //查找路由缓存
@@ -2466,18 +2483,25 @@ int ip_route_input_common(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		    net_eq(dev_net(rth->dst.dev), net) &&
 		    !rt_is_expired(rth)) {
 			ipv4_validate_peer(rth);
-			if (noref) {
+
+			//noref区别，基本上其它设备发来的报文noref为ture
+			if (noref) {				
 				dst_use_noref(&rth->dst, jiffies);
+				//更新该缓存计数器和时间
+				
 				skb_dst_set_noref(skb, &rth->dst);
 			} else {
+				//基本上自己发给自己的报文会走到这里来
 				dst_use(&rth->dst, jiffies);
 				skb_dst_set(skb, &rth->dst);
 			}
+			//增加命中计数
 			RT_CACHE_STAT_INC(in_hit);
 			rcu_read_unlock();
 			return 0;
 		}
-		RT_CACHE_STAT_INC(in_hlist_search);
+			//增加查找次数统计
+			RT_CACHE_STAT_INC(in_hlist_search);
 	}
 
 skip_cache:
@@ -2514,6 +2538,8 @@ skip_cache:
 		rcu_read_unlock();
 		return -EINVAL;
 	}
+
+	//查询路由表
 	res = ip_route_input_slow(skb, daddr, saddr, tos, dev);
 	rcu_read_unlock();
 	return res;
@@ -3452,11 +3478,13 @@ static int __init set_rhash_entries(char *str)
 }
 __setup("rhash_entries=", set_rhash_entries);
 
+//路由缓存初始化
 int __init ip_rt_init(void)
 {
 	int rc = 0;
 
 #ifdef CONFIG_IP_ROUTE_CLASSID
+	//基于路由的分类器，每个CPU256个变量
 	ip_rt_acct = __alloc_percpu(256 * sizeof(struct ip_rt_acct), __alignof__(struct ip_rt_acct));
 	if (!ip_rt_acct)
 		panic("IP: failed to allocate ip_rt_acct\n");
@@ -3468,12 +3496,15 @@ int __init ip_rt_init(void)
 
 	ipv4_dst_blackhole_ops.kmem_cachep = ipv4_dst_ops.kmem_cachep;
 
+	//初始化每CPU变量
 	if (dst_entries_init(&ipv4_dst_ops) < 0)
 		panic("IP: failed to allocate ipv4_dst_ops counter\n");
 
+	//初始化每CPU变量
 	if (dst_entries_init(&ipv4_dst_blackhole_ops) < 0)
 		panic("IP: failed to allocate ipv4_dst_blackhole_ops counter\n");
 
+	//建立路由缓存
 	rt_hash_table = (struct rt_hash_bucket *)
 		alloc_large_system_hash("IP route cache",
 					sizeof(struct rt_hash_bucket),
@@ -3484,15 +3515,23 @@ int __init ip_rt_init(void)
 					&rt_hash_log,
 					&rt_hash_mask,
 					rhash_entries ? 0 : 512 * 1024);
+	//初始化路由缓存
 	memset(rt_hash_table, 0, (rt_hash_mask + 1) * sizeof(struct rt_hash_bucket));
+
+	//每个hash表
 	rt_hash_lock_init();
 
+	//设置gc时间和缓存最大数量
 	ipv4_dst_ops.gc_thresh = (rt_hash_mask + 1);
 	ip_rt_max_size = (rt_hash_mask + 1) * 16;
 
+	//初始化
 	devinet_init();
+
+	//注册通知链和创建alias缓存
 	ip_fib_init();
 
+	//注册gc任务
 	INIT_DELAYED_WORK_DEFERRABLE(&expires_work, rt_worker_func);
 	expires_ljiffies = jiffies;
 	schedule_delayed_work(&expires_work,
@@ -3504,6 +3543,7 @@ int __init ip_rt_init(void)
 	xfrm_init();
 	xfrm4_init(ip_rt_max_size);
 #endif
+	//注册netlink消息
 	rtnl_register(PF_INET, RTM_GETROUTE, inet_rtm_getroute, NULL, NULL);
 
 #ifdef CONFIG_SYSCTL

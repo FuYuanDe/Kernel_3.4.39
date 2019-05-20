@@ -46,11 +46,12 @@
 #include <net/xfrm.h>
 
 #ifndef CONFIG_IP_MULTIPLE_TABLES
-
+//不支持策略路由
 static int __net_init fib4_rules_init(struct net *net)
 {
 	struct fib_table *local_table, *main_table;
 
+	//这是在初始化路由表啊
 	local_table = fib_trie_table(RT_TABLE_LOCAL);
 	if (local_table == NULL)
 		return -ENOMEM;
@@ -1044,6 +1045,7 @@ static struct notifier_block fib_netdev_notifier = {
 	.notifier_call = fib_netdev_event,
 };
 
+//创建路由表缓存和默认策略或者默认路由表
 static int __net_init ip_fib_net_init(struct net *net)
 {
 	int err;
@@ -1052,10 +1054,12 @@ static int __net_init ip_fib_net_init(struct net *net)
 	/* Avoid false sharing : Use at least a full cache line */
 	size = max_t(size_t, size, L1_CACHE_BYTES);
 
+	//创建路由表缓存，
 	net->ipv4.fib_table_hash = kzalloc(size, GFP_KERNEL);
 	if (net->ipv4.fib_table_hash == NULL)
 		return -ENOMEM;
 
+	//分为支持策略路由和不支持两种
 	err = fib4_rules_init(net);
 	if (err < 0)
 		goto fail;
@@ -1095,12 +1099,17 @@ static int __net_init fib_net_init(struct net *net)
 {
 	int error;
 
+	//初始化路由缓存和策略
 	error = ip_fib_net_init(net);
 	if (error < 0)
 		goto out;
+
+	//创建netlink
 	error = nl_fib_lookup_init(net);
 	if (error < 0)
 		goto out_nlfl;
+
+	//初始化proc文件
 	error = fib_proc_init(net);
 	if (error < 0)
 		goto out_proc;

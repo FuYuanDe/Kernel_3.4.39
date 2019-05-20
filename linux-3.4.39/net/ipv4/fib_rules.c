@@ -54,6 +54,7 @@ u32 fib_rules_tclass(const struct fib_result *res)
 }
 #endif
 
+//支持策略路由版本
 int fib_lookup(struct net *net, struct flowi4 *flp, struct fib_result *res)
 {
 	struct fib_lookup_arg arg = {
@@ -62,7 +63,7 @@ int fib_lookup(struct net *net, struct flowi4 *flp, struct fib_result *res)
 	};
 	int err;
 
-    //
+    //策略查找
 	err = fib_rules_lookup(net->ipv4.rules_ops, flowi4_to_flowi(flp), 0, &arg);
 	res->r = arg.rule;
 
@@ -283,6 +284,7 @@ static int fib_default_rules_init(struct fib_rules_ops *ops)
 	return 0;
 }
 
+//支持策略路由的版本，添加默认策略
 int __net_init fib4_rules_init(struct net *net)
 {
 	int err;

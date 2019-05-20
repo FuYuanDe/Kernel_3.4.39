@@ -346,6 +346,7 @@ static int ip_rcv_finish(struct sk_buff *skb)
 	}
 
 #ifdef CONFIG_IP_ROUTE_CLASSID
+	//统计信息
 	if (unlikely(skb_dst(skb)->tclassid)) {
 		struct ip_rt_acct *st = this_cpu_ptr(ip_rt_acct);
 		u32 idx = skb_dst(skb)->tclassid;
@@ -385,12 +386,13 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	/* When the interface is in promisc. mode, drop all the crap
 	 * that it receives, do not try to analyse it.
 	 */
-	 // 非本机报文
+	 //非本机报文直接丢弃
 	if (skb->pkt_type == PACKET_OTHERHOST)
 		goto drop;
 
     // 修改mib统计数据
 	IP_UPD_PO_STATS_BH(dev_net(dev), IPSTATS_MIB_IN, skb->len);
+	
 	// if shared then clone it 
 	/* 谁会去引用呢，在什么场景下会遇到 ？*/
 	if ((skb = skb_share_check(skb, GFP_ATOMIC)) == NULL) {
