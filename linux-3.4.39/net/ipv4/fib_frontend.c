@@ -91,6 +91,8 @@ struct fib_table *fib_new_table(struct net *net, u32 id)
 	return tb;
 }
 
+//不支持策略路由的版本
+//获取指定tableID的路由表，成功返回指针，失败返回NULL
 struct fib_table *fib_get_table(struct net *net, u32 id)
 {
 	struct fib_table *tb;
@@ -98,6 +100,7 @@ struct fib_table *fib_get_table(struct net *net, u32 id)
 	struct hlist_head *head;
 	unsigned int h;
 
+	//默认查询main表
 	if (id == 0)
 		id = RT_TABLE_MAIN;
 	h = id & (FIB_TABLE_HASHSZ - 1);

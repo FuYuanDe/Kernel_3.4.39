@@ -104,7 +104,7 @@ struct rt_trie_node {
 struct leaf {
 	unsigned long parent;
 	t_key key;
-	struct hlist_head list;
+	struct hlist_head list; //存储路由项，fn_alias
 	struct rcu_head rcu;
 };
 
@@ -256,10 +256,14 @@ static inline int tkey_equals(t_key a, t_key b)
 	return a == b;
 }
 
+//检查指定长度的key是否相等
 static inline int tkey_sub_equals(t_key a, int offset, int bits, t_key b)
 {
+	//如果偏移超过最大长度或者比较位为0的话就不需要比较了
+	//这里假定前缀是相等的。当然，trie前缀自然是相等的。
 	if (bits == 0 || offset >= KEYLENGTH)
 		return 1;
+	
 	bits = bits > KEYLENGTH ? KEYLENGTH : bits;
 	return ((a ^ b) << offset) >> (KEYLENGTH - bits) == 0;
 }
@@ -941,6 +945,7 @@ static inline struct list_head *get_fa_head(struct leaf *l, int plen)
 	return &li->falh;
 }
 
+//按照plen升序插入到链表里
 static void insert_leaf_info(struct hlist_head *head, struct leaf_info *new)
 {
 	struct leaf_info *li = NULL, *last = NULL;
@@ -977,8 +982,10 @@ fib_find_node(struct trie *t, u32 key)
 	while (n != NULL &&  NODE_TYPE(n) == T_TNODE) {
 		tn = (struct tnode *) n;
 
+		//仅仅检查tn->pos+tn->bits不超过32
 		check_tnode(tn);
 
+		//检查
 		if (tkey_sub_equals(tn->key, pos, tn->pos-pos, key)) {
 			pos = tn->pos + tn->bits;
 			n = tnode_get_child_rcu(tn,
@@ -1067,6 +1074,7 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 	while (n != NULL &&  NODE_TYPE(n) == T_TNODE) {
 		tn = (struct tnode *) n;
 
+		//仅仅检查pos+bits的和是否合法
 		check_tnode(tn);
 
 		if (tkey_sub_equals(tn->key, pos, tn->pos-pos, key)) {
@@ -1103,12 +1111,16 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 		insert_leaf_info(&l->list, li);
 		goto done;
 	}
+
+	//创建一个叶子节点
 	l = leaf_new();
 
 	if (!l)
 		return NULL;
 
 	l->key = key;
+
+	//创建一个leaf_info节点
 	li = leaf_info_new(plen);
 
 	if (!li) {
@@ -1122,6 +1134,7 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 	if (t->trie && n == NULL) {
 		/* Case 2: n is NULL, and will just insert a new leaf */
 
+		//直接加入一个叶子节点
 		node_set_parent((struct rt_trie_node *)l, tp);
 
 		cindex = tkey_extract_bits(key, tp->pos, tp->bits);
@@ -1200,14 +1213,17 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 	key = ntohl(cfg->fc_dst);
 
 	pr_debug("Insert table=%u %08x/%d\n", tb->tb_id, key, plen);
-
+	
+	//有效位掩码
 	mask = ntohl(inet_make_mask(plen));
 
 	if (key & ~mask)
 		return -EINVAL;
 
+	//地址有效长度
 	key = key & mask;
 
+	//创建fib_info
 	fi = fib_create_info(cfg);
 	if (IS_ERR(fi)) {
 		err = PTR_ERR(fi);
@@ -1350,6 +1366,7 @@ err:
 }
 
 /* should be called with rcu_read_lock */
+//叶子节点
 static int check_leaf(struct fib_table *tb, struct trie *t, struct leaf *l,
 		      t_key key,  const struct flowi4 *flp,
 		      struct fib_result *res, int fib_flags)
@@ -1368,13 +1385,21 @@ static int check_leaf(struct fib_table *tb, struct trie *t, struct leaf *l,
 			struct fib_info *fi = fa->fa_info;
 			int nhsel, err;
 
+			//比较tos
 			if (fa->fa_tos && fa->fa_tos != flp->flowi4_tos)
 				continue;
+			//检查当前路由信息是否可用
 			if (fi->fib_dead)
 				continue;
+
+			//到目的地址的scope必须大于或等于路由里面的scope
 			if (fa->fa_info->fib_scope < flp->flowi4_scope)
 				continue;
+
+			//设置标志位
 			fib_alias_accessed(fa);
+
+			//根据fa_type类型检查响应的错误码
 			err = fib_props[fa->fa_type].error;
 			if (err) {
 #ifdef CONFIG_IP_FIB_TRIE_STATS
@@ -1382,13 +1407,20 @@ static int check_leaf(struct fib_table *tb, struct trie *t, struct leaf *l,
 #endif
 				return err;
 			}
+
+			//啥时候设置这个标志位
 			if (fi->fib_flags & RTNH_F_DEAD)
 				continue;
+
+			//如果存在多个下一跳
+			//这种情况要么是转发要么是发送，本地接受不需要考虑
 			for (nhsel = 0; nhsel < fi->fib_nhs; nhsel++) {
 				const struct fib_nh *nh = &fi->fib_nh[nhsel];
 
 				if (nh->nh_flags & RTNH_F_DEAD)
 					continue;
+
+				//如果绑定了出口设备则和下一跳里面的出口设备比较
 				if (flp->flowi4_oif && flp->flowi4_oif != nh->nh_oif)
 					continue;
 
@@ -1416,17 +1448,23 @@ static int check_leaf(struct fib_table *tb, struct trie *t, struct leaf *l,
 	return 1;
 }
 
+//查找路由表
 int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 		     struct fib_result *res, int fib_flags)
 {
+	//将table转换成trie节点
 	struct trie *t = (struct trie *) tb->tb_data;
 	int ret;
 	struct rt_trie_node *n;
 	struct tnode *pn;
 	unsigned int pos, bits;
+
+	//关键字是目的地址
 	t_key key = ntohl(flp->daddr);
 	unsigned int chopped_off;
 	t_key cindex = 0;
+
+	//单位是bit,32
 	unsigned int current_prefix_length = KEYLENGTH;
 	struct tnode *cn;
 	t_key pref_mismatch;

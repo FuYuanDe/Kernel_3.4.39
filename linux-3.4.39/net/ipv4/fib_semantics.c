@@ -703,6 +703,7 @@ __be32 fib_info_update_nh_saddr(struct net *net, struct fib_nh *nh)
 	return nh->nh_saddr;
 }
 
+//创建fib_info
 struct fib_info *fib_create_info(struct fib_config *cfg)
 {
 	int err;

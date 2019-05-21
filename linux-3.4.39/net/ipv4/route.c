@@ -2283,22 +2283,23 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	   by fib_lookup.
 	 */
 
-	//检查源地址
+	//检查源地址是否合法
 	if (ipv4_is_multicast(saddr) || ipv4_is_lbcast(saddr) ||
 	    ipv4_is_loopback(saddr))
 		goto martian_source;
 	
-	//检查目的地址
+	//检查目的地址是否合法
 	if (ipv4_is_lbcast(daddr) || (saddr == 0 && daddr == 0))
 		goto brd_input;
 
 	/* Accept zero addresses only to limited broadcast;
 	 * I even do not know to fix it or not. Waiting for complains :-)
 	 */
-	//检查源地址
+	//检查源地址是否合法
 	if (ipv4_is_zeronet(saddr))
 		goto martian_source;
 
+	//检查目的地址是否合法
 	if (ipv4_is_zeronet(daddr) || ipv4_is_loopback(daddr))
 		goto martian_destination;
 
@@ -2310,11 +2311,13 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	fl4.flowi4_iif = dev->ifindex;
 	fl4.flowi4_mark = skb->mark;
 	fl4.flowi4_tos = tos;
+
+	//所有输入报文目的地址的scope都是UNIVERSE
 	fl4.flowi4_scope = RT_SCOPE_UNIVERSE;
 	fl4.daddr = daddr;
 	fl4.saddr = saddr;
 
-	//查找路由表
+	//查找路由表,主要操作
 	err = fib_lookup(net, &fl4, &res);
 	if (err != 0) {
 		if (!IN_DEV_FORWARD(in_dev))
@@ -2366,11 +2369,13 @@ brd_input:
 	RT_CACHE_STAT_INC(in_brd);
 
 local_input:
+	//加入到缓存里
 	rth = rt_dst_alloc(net->loopback_dev,
 			   IN_DEV_CONF_GET(in_dev, NOPOLICY), false);
 	if (!rth)
 		goto e_nobufs;
 
+	//提交到本地的虚函数接口设置成ip_local_deliver
 	rth->dst.input= ip_local_deliver;
 	rth->dst.output= ip_rt_bug;
 #ifdef CONFIG_IP_ROUTE_CLASSID
@@ -2450,6 +2455,7 @@ martian_source_keep_err:
 	goto out;
 }
 
+//
 int ip_route_input_common(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 			   u8 tos, struct net_device *dev, bool noref)
 {
