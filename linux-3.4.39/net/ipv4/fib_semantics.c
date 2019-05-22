@@ -229,6 +229,7 @@ static inline unsigned int fib_info_hashfn(const struct fib_info *fi)
 	return (val ^ (val >> 7) ^ (val >> 12)) & mask;
 }
 
+//查找是否存在与新的nfi一致的旧fi,存在返回旧fi,否则返回NULL
 static struct fib_info *fib_find_info(const struct fib_info *nfi)
 {
 	struct hlist_head *head;
@@ -540,6 +541,7 @@ static int fib_check_nh(struct fib_config *cfg, struct fib_info *fi,
 	if (nh->nh_gw) {
 		struct fib_result res;
 
+		//该标志位的作用
 		if (nh->nh_flags & RTNH_F_ONLINK) {
 
 			if (cfg->fc_scope >= RT_SCOPE_LINK)
@@ -584,6 +586,7 @@ static int fib_check_nh(struct fib_config *cfg, struct fib_info *fi,
 		dev_hold(dev);
 		err = (dev->flags & IFF_UP) ? 0 : -ENETDOWN;
 	} else {
+		//直连路由
 		struct in_device *in_dev;
 
 		if (nh->nh_flags & (RTNH_F_PERVASIVE | RTNH_F_ONLINK))
@@ -703,7 +706,7 @@ __be32 fib_info_update_nh_saddr(struct net *net, struct fib_nh *nh)
 	return nh->nh_saddr;
 }
 
-//创建fib_info
+//创建fib_info，该结构体包含很多路由信息，可以共享
 struct fib_info *fib_create_info(struct fib_config *cfg)
 {
 	int err;
@@ -716,9 +719,11 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 		goto err_inval;
 
 	/* Fast check to catch the most weird cases */
+	//检查地址类型和路由scope是否匹配
 	if (fib_props[cfg->fc_type].scope > cfg->fc_scope)
 		goto err_inval;
 
+	//处理多路径路由
 #ifdef CONFIG_IP_ROUTE_MULTIPATH
 	if (cfg->fc_mp) {
 		nhs = fib_count_nexthops(cfg->fc_mp, cfg->fc_mp_len);
@@ -728,6 +733,8 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 #endif
 
 	err = -ENOBUFS;
+
+	//超出哈希表大小则扩容一倍，实际的扩容大小和系统页大小有关
 	if (fib_info_cnt >= fib_info_hash_size) {
 		unsigned int new_size = fib_info_hash_size << 1;
 		struct hlist_head *new_info_hash;
@@ -749,6 +756,7 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 			goto failure;
 	}
 
+	//分配一个新的fib_info结构体
 	fi = kzalloc(sizeof(*fi)+nhs*sizeof(struct fib_nh), GFP_KERNEL);
 	if (fi == NULL)
 		goto failure;
@@ -758,6 +766,8 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 			goto failure;
 	} else
 		fi->fib_metrics = (u32 *) dst_default_metrics;
+
+	//递增
 	fib_info_cnt++;
 
 	fi->fib_net = hold_net(net);
@@ -805,7 +815,7 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 #endif
 	} else {
 		struct fib_nh *nh = fi->fib_nh;
-
+		//获取下一跳出口设备、网关
 		nh->nh_oif = cfg->fc_oif;
 		nh->nh_gw = cfg->fc_gw;
 		nh->nh_flags = cfg->fc_flags;
@@ -841,6 +851,7 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 		struct fib_nh *nh = fi->fib_nh;
 
 		/* Local address is added. */
+		//本地主机是不需要网关的
 		if (nhs != 1 || nh->nh_gw)
 			goto err_inval;
 		nh->nh_scope = RT_SCOPE_NOWHERE;
@@ -850,12 +861,14 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 			goto failure;
 	} else {
 		change_nexthops(fi) {
+			//检查下一跳合法性
 			err = fib_check_nh(cfg, fi, nexthop_nh);
 			if (err != 0)
 				goto failure;
 		} endfor_nexthops(fi)
 	}
 
+	//针对源地址的检查？？
 	if (fi->fib_prefsrc) {
 		if (cfg->fc_type != RTN_LOCAL || !cfg->fc_dst ||
 		    fi->fib_prefsrc != cfg->fc_dst)
@@ -863,11 +876,13 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 				goto err_inval;
 	}
 
+	//选择地址
 	change_nexthops(fi) {
 		fib_info_update_nh_saddr(net, nexthop_nh);
 	} endfor_nexthops(fi)
 
 link_it:
+	//如果存在旧的fib_info，则释放掉新建的fi_info，增加旧fib_info的引用计数
 	ofi = fib_find_info(fi);
 	if (ofi) {
 		fi->fib_dead = 1;

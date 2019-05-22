@@ -178,6 +178,7 @@ extern void fib_free_table(struct fib_table *tb);
 #define TABLE_LOCAL_INDEX	0
 #define TABLE_MAIN_INDEX	1
 
+//不支持策略路由版本
 static inline struct fib_table *fib_get_table(struct net *net, u32 id)
 {
 	struct hlist_head *ptr;

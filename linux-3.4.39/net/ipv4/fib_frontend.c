@@ -72,6 +72,7 @@ fail:
 }
 #else
 
+//创建路由表
 struct fib_table *fib_new_table(struct net *net, u32 id)
 {
 	struct fib_table *tb;
@@ -91,7 +92,7 @@ struct fib_table *fib_new_table(struct net *net, u32 id)
 	return tb;
 }
 
-//不支持策略路由的版本
+//支持策略路由的版本
 //获取指定tableID的路由表，成功返回指针，失败返回NULL
 struct fib_table *fib_get_table(struct net *net, u32 id)
 {
@@ -492,6 +493,7 @@ const struct nla_policy rtm_ipv4_policy[RTA_MAX + 1] = {
 	[RTA_UID]		= { .type = NLA_U32 },
 };
 
+//
 static int rtm_to_fib_config(struct net *net, struct sk_buff *skb,
 			     struct nlmsghdr *nlh, struct fib_config *cfg)
 {
@@ -499,6 +501,7 @@ static int rtm_to_fib_config(struct net *net, struct sk_buff *skb,
 	int err, remaining;
 	struct rtmsg *rtm;
 
+	//验证netlink msg的消息合法性
 	err = nlmsg_validate(nlh, sizeof(*rtm), RTA_MAX, rtm_ipv4_policy);
 	if (err < 0)
 		goto errout;
@@ -506,13 +509,28 @@ static int rtm_to_fib_config(struct net *net, struct sk_buff *skb,
 	memset(cfg, 0, sizeof(*cfg));
 
 	rtm = nlmsg_data(nlh);
+	//目的地址长度
 	cfg->fc_dst_len = rtm->rtm_dst_len;
+
+	//tos
 	cfg->fc_tos = rtm->rtm_tos;
+
+	//指定添加的路由表
 	cfg->fc_table = rtm->rtm_table;
+
+	//协议
 	cfg->fc_protocol = rtm->rtm_protocol;
+
+	//
 	cfg->fc_scope = rtm->rtm_scope;
+
+	//单播、广播...
 	cfg->fc_type = rtm->rtm_type;
+
+	//
 	cfg->fc_flags = rtm->rtm_flags;
+
+	//
 	cfg->fc_nlflags = nlh->nlmsg_flags;
 
 	cfg->fc_nlinfo.pid = NETLINK_CB(skb).pid;
@@ -585,6 +603,7 @@ errout:
 	return err;
 }
 
+//添加路由
 static int inet_rtm_newroute(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 {
 	struct net *net = sock_net(skb->sk);
@@ -592,16 +611,19 @@ static int inet_rtm_newroute(struct sk_buff *skb, struct nlmsghdr *nlh, void *ar
 	struct fib_table *tb;
 	int err;
 
+	//将用户层配置信息转换成fib_config内核可识别的信息
 	err = rtm_to_fib_config(net, skb, nlh, &cfg);
 	if (err < 0)
 		goto errout;
 
+	//如果指定ID的路由表存在则返回该表，不存在则新建
 	tb = fib_new_table(net, cfg.fc_table);
 	if (tb == NULL) {
 		err = -ENOBUFS;
 		goto errout;
 	}
 
+	//插入路由
 	err = fib_table_insert(tb, &cfg);
 errout:
 	return err;

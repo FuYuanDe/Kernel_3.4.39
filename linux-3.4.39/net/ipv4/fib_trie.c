@@ -104,7 +104,7 @@ struct rt_trie_node {
 struct leaf {
 	unsigned long parent;
 	t_key key;
-	struct hlist_head list; //存储路由项，fn_alias
+	struct hlist_head list; //存储leaf_info
 	struct rcu_head rcu;
 };
 
@@ -243,6 +243,7 @@ static inline t_key mask_pfx(t_key k, unsigned int l)
 	return (l == 0) ? 0 : k >> (KEYLENGTH-l) << (KEYLENGTH-l);
 }
 
+//提取关键bits数值
 static inline t_key tkey_extract_bits(t_key a, unsigned int offset, unsigned int bits)
 {
 	if (offset < KEYLENGTH)
@@ -451,10 +452,13 @@ static struct leaf *leaf_new(void)
 	return l;
 }
 
+//创建leaf_info
+//plen表示掩码的长度
+//mask_plen表示plen长度的掩码，这么明显的问题！！！
 static struct leaf_info *leaf_info_new(int plen)
 {
 	struct leaf_info *li = kmalloc(sizeof(struct leaf_info),  GFP_KERNEL);
-	if (li) {
+	if (li) {		
 		li->plen = plen;
 		li->mask_plen = ntohl(inet_make_mask(plen));
 		INIT_LIST_HEAD(&li->falh);
@@ -462,8 +466,10 @@ static struct leaf_info *leaf_info_new(int plen)
 	return li;
 }
 
+//新建tnode节点，创建tnode的时候就已经开始初始化empty_children
 static struct tnode *tnode_new(t_key key, int pos, int bits)
 {
+	//tnode 加上孩子节点个数
 	size_t sz = sizeof(struct tnode) + (sizeof(struct rt_trie_node *) << bits);
 	struct tnode *tn = tnode_alloc(sz);
 
@@ -504,25 +510,30 @@ static inline void put_child(struct trie *t, struct tnode *tn, int i,
   * Add a child at position i overwriting the old value.
   * Update the value of full_children and empty_children.
   */
-
+//和字面意思类似
 static void tnode_put_child_reorg(struct tnode *tn, int i, struct rt_trie_node *n,
 				  int wasfull)
 {
 	struct rt_trie_node *chi = rtnl_dereference(tn->child[i]);
 	int isfull;
 
+	//判断孩子的个数是否合法
 	BUG_ON(i >= 1<<tn->bits);
 
 	/* update emptyChildren */
 	if (n == NULL && chi != NULL)
 		tn->empty_children++;
+
+	//添加一个child，所以空位置要减去1
 	else if (n != NULL && chi == NULL)
 		tn->empty_children--;
 
 	/* update fullChildren */
+	//这里有两种情况，chi为NULL或者!NULL
 	if (wasfull == -1)
 		wasfull = tnode_full(tn, chi);
 
+	//判断新节点相对于tp节点
 	isfull = tnode_full(tn, n);
 	if (wasfull && !isfull)
 		tn->full_children--;
@@ -969,6 +980,7 @@ static void insert_leaf_info(struct hlist_head *head, struct leaf_info *new)
 
 /* rcu_read_lock needs to be hold by caller from readside */
 
+//查找节点，第一次查找返回NULL
 static struct leaf *
 fib_find_node(struct trie *t, u32 key)
 {
@@ -979,6 +991,7 @@ fib_find_node(struct trie *t, u32 key)
 	pos = 0;
 	n = rcu_dereference_rtnl(t->trie);
 
+	//初始化的时候是没有任何节点的，所以这里的循环不用看
 	while (n != NULL &&  NODE_TYPE(n) == T_TNODE) {
 		tn = (struct tnode *) n;
 
@@ -1038,7 +1051,12 @@ static void trie_rebalance(struct trie *t, struct tnode *tn)
 }
 
 /* only used from updater-side */
-
+//找出公共前缀，建立公共节点，建立叶子节点
+//单一路由项可以直接组成一个叶子节点
+//多个路由项需要找出共同前缀，然后组成叶子节点。
+//路径压缩，到某个叶子节点的路径上没有其它节点，可以缩减路径长度
+//层级压缩，如果某个节点的子节点都是中间节点，则中间节点可省略
+//
 static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 {
 	int pos, newpos;
@@ -1071,6 +1089,7 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 	 * If it doesn't, we need to replace it with a T_TNODE.
 	 */
 
+	//第一次进来n肯定时NULL,所以这里不用看
 	while (n != NULL &&  NODE_TYPE(n) == T_TNODE) {
 		tn = (struct tnode *) n;
 
@@ -1099,7 +1118,7 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 	BUG_ON(tp && IS_LEAF(tp));
 
 	/* Case 1: n is a leaf. Compare prefixes */
-
+	//首次插入n为NULL，因此不用看这里
 	if (n != NULL && IS_LEAF(n) && tkey_equals(key, n->key)) {
 		l = (struct leaf *) n;
 		li = leaf_info_new(plen);
@@ -1112,31 +1131,36 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 		goto done;
 	}
 
-	//创建一个叶子节点
-	l = leaf_new();
-
+	//创建一个叶子节点，创建失败返回NULL
+	//大小为max(leaf, leaf_info)
+	l = leaf_new();	
 	if (!l)
 		return NULL;
 
+	//key即dst&掩码
 	l->key = key;
 
-	//创建一个leaf_info节点
+	//创建一个leaf_info节点，创建失败则返回
 	li = leaf_info_new(plen);
-
 	if (!li) {
 		free_leaf(l);
 		return NULL;
 	}
 
+	//fib_alias
 	fa_head = &li->falh;
+
+	//关联leaf和leaf_info，有可能一个leaf节点关联多个leaf_info结构体
 	insert_leaf_info(&l->list, li);
 
+	//首次插入节点的时候trie为NULL，这里不用看
 	if (t->trie && n == NULL) {
 		/* Case 2: n is NULL, and will just insert a new leaf */
 
 		//直接加入一个叶子节点
 		node_set_parent((struct rt_trie_node *)l, tp);
 
+		//提取关键段
 		cindex = tkey_extract_bits(key, tp->pos, tp->bits);
 		put_child(t, (struct tnode *)tp, cindex, (struct rt_trie_node *)l);
 	} else {
@@ -1146,11 +1170,13 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 		 *  first tnode need some special handling
 		 */
 
+		//首次插入tp为NULL,难道因为是第一个节点，pos初始化为0？
 		if (tp)
 			pos = tp->pos+tp->bits;
 		else
 			pos = 0;
 
+		//首次插入n还不存在
 		if (n) {
 			newpos = tkey_mismatch(key, pos, n->key);
 			tn = tnode_new(n->key, newpos, 1);
@@ -1167,7 +1193,10 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 
 		node_set_parent((struct rt_trie_node *)tn, tp);
 
+		//初始化的时候bits默认配置为1吗？
 		missbit = tkey_extract_bits(key, newpos, 1);
+
+		//
 		put_child(t, tn, missbit, (struct rt_trie_node *)l);
 		put_child(t, tn, 1-missbit, n);
 
@@ -1195,6 +1224,7 @@ done:
 /*
  * Caller must hold RTNL.
  */
+ //插入新的路由项
 int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 {
 	struct trie *t = (struct trie *) tb->tb_data;
@@ -1210,6 +1240,7 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 	if (plen > 32)
 		return -EINVAL;
 
+	//获取目的地址有效长度
 	key = ntohl(cfg->fc_dst);
 
 	pr_debug("Insert table=%u %08x/%d\n", tb->tb_id, key, plen);
@@ -1217,6 +1248,7 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 	//有效位掩码
 	mask = ntohl(inet_make_mask(plen));
 
+	//检查ip route 命令里面1.1.1.1/24 ip地址和掩码是否正确配置
 	if (key & ~mask)
 		return -EINVAL;
 
@@ -1230,6 +1262,7 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 		goto err;
 	}
 
+	//第一次进来是NULL
 	l = fib_find_node(t, key);
 	fa = NULL;
 
@@ -1249,6 +1282,8 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 	 * and we need to allocate a new one of those as well.
 	 */
 
+	//fa_alias 存储了tos，priority等信息
+	//首次插入fa为NULL
 	if (fa && fa->fa_tos == tos &&
 	    fa->fa_info->fib_priority == fi->fib_priority) {
 		struct fib_alias *fa_first, *fa_match;
@@ -1321,14 +1356,20 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 			fa = fa_first;
 	}
 	err = -ENOENT;
+
+	//如果没有设置该标识位则返回错误
+	//可以查看iproute2源码，可以看下它在下发路由的时候做了哪些操作
 	if (!(cfg->fc_nlflags & NLM_F_CREATE))
 		goto out;
 
 	err = -ENOBUFS;
+
+	//从内存池中新建一个fib_alias结构体
 	new_fa = kmem_cache_alloc(fn_alias_kmem, GFP_KERNEL);
 	if (new_fa == NULL)
 		goto out;
 
+	//初始化alias
 	new_fa->fa_info = fi;
 	new_fa->fa_tos = tos;
 	new_fa->fa_type = cfg->fc_type;
@@ -1336,8 +1377,10 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 	/*
 	 * Insert new entry to the list.
 	 */
-
+	//第一次会走到这里来
 	if (!fa_head) {
+
+		//这一步才是重点，将节点插入到trie树中来
 		fa_head = fib_insert_node(t, key, plen);
 		if (unlikely(!fa_head)) {
 			err = -ENOMEM;
@@ -1345,6 +1388,7 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 		}
 	}
 
+	//增加默认网关
 	if (!plen)
 		tb->tb_num_default++;
 
@@ -2016,7 +2060,7 @@ void __init fib_trie_init(void)
 					   0, SLAB_PANIC, NULL);
 }
 
-
+//创建路由表，策略路由版本
 struct fib_table *fib_trie_table(u32 id)
 {
 	struct fib_table *tb;
@@ -2029,6 +2073,8 @@ struct fib_table *fib_trie_table(u32 id)
 
 	tb->tb_id = id;
 	tb->tb_default = -1;
+
+	//默认路由的数量
 	tb->tb_num_default = 0;
 
 	t = (struct trie *) tb->tb_data;
