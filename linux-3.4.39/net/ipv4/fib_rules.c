@@ -81,24 +81,29 @@ static int fib4_rule_action(struct fib_rule *rule, struct flowi *flp,
 	case FR_ACT_TO_TBL:
 		break;
 
+	//不可达
 	case FR_ACT_UNREACHABLE:
 		err = -ENETUNREACH;
 		goto errout;
 
+	//禁止此类报文
 	case FR_ACT_PROHIBIT:
 		err = -EACCES;
 		goto errout;
 
+	//丢弃此类报文，
 	case FR_ACT_BLACKHOLE:
 	default:
 		err = -EINVAL;
 		goto errout;
 	}
 
+	//获取指定路由表指针
 	tbl = fib_get_table(rule->fr_net, rule->table);
 	if (!tbl)
 		goto errout;
 
+	//查询路由表
 	err = fib_table_lookup(tbl, &flp->u.ip4, (struct fib_result *) arg->result, arg->flags);
 	if (err > 0)
 		err = -EAGAIN;

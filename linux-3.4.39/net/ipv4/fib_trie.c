@@ -101,6 +101,7 @@ struct rt_trie_node {
 	t_key key;
 };
 
+//存放key和parent地址信息
 struct leaf {
 	unsigned long parent;
 	t_key key;
@@ -108,6 +109,7 @@ struct leaf {
 	struct rcu_head rcu;
 };
 
+//存放地址掩码及其长度以及路由项的指针falh
 struct leaf_info {
 	struct hlist_node hlist;
 	int plen;
@@ -269,6 +271,7 @@ static inline int tkey_sub_equals(t_key a, int offset, int bits, t_key b)
 	return ((a ^ b) << offset) >> (KEYLENGTH - bits) == 0;
 }
 
+//找出新旧key不同的第一个比特位位置
 static inline int tkey_mismatch(t_key a, int offset, t_key b)
 {
 	t_key diff = a ^ b;
@@ -289,7 +292,7 @@ static inline int tkey_mismatch(t_key a, int offset, t_key b)
   Consider a node 'n' and its parent 'tp'.
 
   If n is a leaf, every bit in its key is significant. Its presence is
-  necessitated by path compression, since during a tree traversal (when
+  necessitated(需要) by path compression, since during a tree traversal (when
   searching for a leaf - unless we are doing an insertion) we will completely
   ignore all skipped bits we encounter. Thus we need to verify, at the end of
   a potentially successful search, that we have indeed been walking the
@@ -511,6 +514,7 @@ static inline void put_child(struct trie *t, struct tnode *tn, int i,
   * Update the value of full_children and empty_children.
   */
 //和字面意思类似
+//第一次调用传入一个tn和n，n为叶子节点
 static void tnode_put_child_reorg(struct tnode *tn, int i, struct rt_trie_node *n,
 				  int wasfull)
 {
@@ -521,10 +525,12 @@ static void tnode_put_child_reorg(struct tnode *tn, int i, struct rt_trie_node *
 	BUG_ON(i >= 1<<tn->bits);
 
 	/* update emptyChildren */
+	//类似删除的操作
 	if (n == NULL && chi != NULL)
 		tn->empty_children++;
 
 	//添加一个child，所以空位置要减去1
+	//添加操作
 	else if (n != NULL && chi == NULL)
 		tn->empty_children--;
 
@@ -956,7 +962,7 @@ static inline struct list_head *get_fa_head(struct leaf *l, int plen)
 	return &li->falh;
 }
 
-//按照plen升序插入到链表里
+//list链表按照掩码长度降序排列
 static void insert_leaf_info(struct hlist_head *head, struct leaf_info *new)
 {
 	struct leaf_info *li = NULL, *last = NULL;
@@ -980,7 +986,7 @@ static void insert_leaf_info(struct hlist_head *head, struct leaf_info *new)
 
 /* rcu_read_lock needs to be hold by caller from readside */
 
-//查找节点，第一次查找返回NULL
+//查找key相同的叶子节点，即地址相同
 static struct leaf *
 fib_find_node(struct trie *t, u32 key)
 {
@@ -991,14 +997,13 @@ fib_find_node(struct trie *t, u32 key)
 	pos = 0;
 	n = rcu_dereference_rtnl(t->trie);
 
-	//初始化的时候是没有任何节点的，所以这里的循环不用看
+	//从根节点遍历子节点
 	while (n != NULL &&  NODE_TYPE(n) == T_TNODE) {
 		tn = (struct tnode *) n;
 
 		//仅仅检查tn->pos+tn->bits不超过32
 		check_tnode(tn);
-
-		//检查
+	
 		if (tkey_sub_equals(tn->key, pos, tn->pos-pos, key)) {
 			pos = tn->pos + tn->bits;
 			n = tnode_get_child_rcu(tn,
@@ -1009,9 +1014,9 @@ fib_find_node(struct trie *t, u32 key)
 			break;
 	}
 	/* Case we have found a leaf. Compare prefixes */
-
+	//只有在子节点的key值完全相同情况下返回，这种情况就是IP地址相同
 	if (n != NULL && IS_LEAF(n) && tkey_equals(key, n->key))
-		return (struct leaf *)n;
+		return (struct leaf *)n;	
 
 	return NULL;
 }
@@ -1069,6 +1074,7 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 	t_key cindex;
 
 	pos = 0;
+	//获取根节点
 	n = rtnl_dereference(t->trie);
 
 	/* If we point to NULL, stop. Either the tree is empty and we should
@@ -1089,7 +1095,8 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 	 * If it doesn't, we need to replace it with a T_TNODE.
 	 */
 
-	//第一次进来n肯定时NULL,所以这里不用看
+	//第一次进来n肯定是NULL
+	//第二次进来n是leaf
 	while (n != NULL &&  NODE_TYPE(n) == T_TNODE) {
 		tn = (struct tnode *) n;
 
@@ -1099,6 +1106,7 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 		if (tkey_sub_equals(tn->key, pos, tn->pos-pos, key)) {
 			tp = tn;
 			pos = tn->pos + tn->bits;
+
 			n = tnode_get_child(tn,
 					    tkey_extract_bits(key,
 							      tn->pos,
@@ -1111,6 +1119,8 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 
 	/*
 	 * n  ----> NULL, LEAF or TNODE
+	 * 到这里了，n要么是NULL，要么就是一个前缀相同的子leaf节点，或者
+	 * 就是key不相同的tnode中间节点
 	 *
 	 * tp is n's (parent) ----> NULL or TNODE
 	 */
@@ -1118,7 +1128,7 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 	BUG_ON(tp && IS_LEAF(tp));
 
 	/* Case 1: n is a leaf. Compare prefixes */
-	//首次插入n为NULL，因此不用看这里
+	//key相同的话直接添加一个leaf_info返回
 	if (n != NULL && IS_LEAF(n) && tkey_equals(key, n->key)) {
 		l = (struct leaf *) n;
 		li = leaf_info_new(plen);
@@ -1147,20 +1157,20 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 		return NULL;
 	}
 
-	//fib_alias
 	fa_head = &li->falh;
 
-	//关联leaf和leaf_info，有可能一个leaf节点关联多个leaf_info结构体
+	//关联leaf和leaf_info，一个leaf节点可以关联多个leaf_info结构体
 	insert_leaf_info(&l->list, li);
 
-	//首次插入节点的时候trie为NULL，这里不用看
+	//第一次添加路由项会走到这里
+	//后续走到这里也有可能是遇到了空的child_slot，这时候直接插入进来即可
 	if (t->trie && n == NULL) {
 		/* Case 2: n is NULL, and will just insert a new leaf */
 
 		//直接加入一个叶子节点
 		node_set_parent((struct rt_trie_node *)l, tp);
 
-		//提取关键段
+		//获取要插入的位置
 		cindex = tkey_extract_bits(key, tp->pos, tp->bits);
 		put_child(t, (struct tnode *)tp, cindex, (struct rt_trie_node *)l);
 	} else {
@@ -1170,7 +1180,7 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 		 *  first tnode need some special handling
 		 */
 
-		//首次插入tp为NULL,难道因为是第一个节点，pos初始化为0？
+		//如果存在父节点的话，则获取公共前缀长度
 		if (tp)
 			pos = tp->pos+tp->bits;
 		else
@@ -1178,7 +1188,11 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 
 		//首次插入n还不存在
 		if (n) {
+			//和原有的节点比较，找出比特位不同的地方，newpos值就是新节点的pos值
+			//这个值用来创建新节点的时候使用
 			newpos = tkey_mismatch(key, pos, n->key);
+
+			//新节点的孩子只有两位
 			tn = tnode_new(n->key, newpos, 1);
 		} else {
 			newpos = 0;
@@ -1191,13 +1205,16 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 			return NULL;
 		}
 
+		//设置父节点，tp可能是NULL
 		node_set_parent((struct rt_trie_node *)tn, tp);
 
-		//初始化的时候bits默认配置为1吗？
+		//获取新节点在child数组中的位置
 		missbit = tkey_extract_bits(key, newpos, 1);
 
-		//
+		//将原来的节点插入进来
 		put_child(t, tn, missbit, (struct rt_trie_node *)l);
+
+		//将原有节点插入进来，n可以是NULL.
 		put_child(t, tn, 1-missbit, n);
 
 		if (tp) {
@@ -1205,6 +1222,7 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 			put_child(t, (struct tnode *)tp, cindex,
 				  (struct rt_trie_node *)tn);
 		} else {
+			//第一次插入要更新root节点
 			rcu_assign_pointer(t->trie, (struct rt_trie_node *)tn);
 			tp = tn;
 		}
@@ -1240,34 +1258,38 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 	if (plen > 32)
 		return -EINVAL;
 
-	//获取目的地址有效长度
+	//获取目的地址
 	key = ntohl(cfg->fc_dst);
 
 	pr_debug("Insert table=%u %08x/%d\n", tb->tb_id, key, plen);
-	
-	//有效位掩码
+
+	//有效位掩码，由1组成
 	mask = ntohl(inet_make_mask(plen));
 
-	//检查ip route 命令里面1.1.1.1/24 ip地址和掩码是否正确配置
+	//检查dst和掩码配置是否正确
 	if (key & ~mask)
 		return -EINVAL;
 
-	//地址有效长度
+	//设置地址有效部分
 	key = key & mask;
 
-	//创建fib_info
+	//创建fib_info，如果已经存在相同的话就不需要重建直接复用就行了。
+	//fib_info主要存储了路由下一跳相关信息
 	fi = fib_create_info(cfg);
 	if (IS_ERR(fi)) {
 		err = PTR_ERR(fi);
 		goto err;
 	}
 
-	//第一次进来是NULL
+	//查找目的地址完全相同的叶子节点
 	l = fib_find_node(t, key);
 	fa = NULL;
 
+	//存在地址相同的叶子节点
 	if (l) {
 		fa_head = get_fa_head(l, plen);
+
+		//这时候返回的可能是tos小的或者priority大的
 		fa = fib_find_alias(fa_head, tos, fi->fib_priority);
 	}
 
@@ -1283,12 +1305,13 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 	 */
 
 	//fa_alias 存储了tos，priority等信息
-	//首次插入fa为NULL
 	if (fa && fa->fa_tos == tos &&
 	    fa->fa_info->fib_priority == fi->fib_priority) {
 		struct fib_alias *fa_first, *fa_match;
 
 		err = -EEXIST;
+
+		//如果设置了不允许覆盖标识的话，返回已存在错误
 		if (cfg->fc_nlflags & NLM_F_EXCL)
 			goto out;
 
@@ -1307,22 +1330,32 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 				break;
 			if (fa->fa_type == cfg->fc_type &&
 			    fa->fa_info == fi) {
+			    //下一跳信息相同
 				fa_match = fa;
 				break;
 			}
 		}
 
+		//如果携带了替换标志位的话
 		if (cfg->fc_nlflags & NLM_F_REPLACE) {
 			struct fib_info *fi_drop;
 			u8 state;
 
 			fa = fa_first;
 			if (fa_match) {
+				//完全重复不需要替换，这个时候不用报错直接返回就好。	
 				if (fa == fa_match)
 					err = 0;
+
+				//不完全重复，替换失败，报错。
+				//这种情况暂时还没想到。
+				//
 				goto out;
 			}
+			
 			err = -ENOBUFS;
+
+			//分配一个新的fa_alias
 			new_fa = kmem_cache_alloc(fn_alias_kmem, GFP_KERNEL);
 			if (new_fa == NULL)
 				goto out;
@@ -1334,10 +1367,15 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 			state = fa->fa_state;
 			new_fa->fa_state = state & ~FA_S_ACCESSED;
 
+			//替换旧的
 			list_replace_rcu(&fa->fa_list, &new_fa->fa_list);
+
+			//释放旧的
 			alias_free_mem_rcu(fa);
 
+			//释放旧的fa_info,如果没人引用则释放
 			fib_release_info(fi_drop);
+			
 			if (state & FA_S_ACCESSED)
 				rt_cache_flush(cfg->fc_nlinfo.nl_net, -1);
 			rtmsg_fib(RTM_NEWROUTE, htonl(key), new_fa, plen,
@@ -1349,16 +1387,17 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 		 * uses the same scope, type, and nexthop
 		 * information.
 		 */
+		//路由重复了，返回错误
 		if (fa_match)
 			goto out;
 
+		//追加呢
 		if (!(cfg->fc_nlflags & NLM_F_APPEND))
 			fa = fa_first;
 	}
 	err = -ENOENT;
 
 	//如果没有设置该标识位则返回错误
-	//可以查看iproute2源码，可以看下它在下发路由的时候做了哪些操作
 	if (!(cfg->fc_nlflags & NLM_F_CREATE))
 		goto out;
 
@@ -1374,12 +1413,11 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 	new_fa->fa_tos = tos;
 	new_fa->fa_type = cfg->fc_type;
 	new_fa->fa_state = 0;
+	
 	/*
 	 * Insert new entry to the list.
 	 */
-	//第一次会走到这里来
 	if (!fa_head) {
-
 		//这一步才是重点，将节点插入到trie树中来
 		fa_head = fib_insert_node(t, key, plen);
 		if (unlikely(!fa_head)) {
@@ -1387,7 +1425,6 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 			goto out_free_new_fa;
 		}
 	}
-
 	//增加默认网关
 	if (!plen)
 		tb->tb_num_default++;
@@ -1410,7 +1447,11 @@ err:
 }
 
 /* should be called with rcu_read_lock */
-//叶子节点
+//
+//同一个叶子节点下包含一个或多个leaf_info，按照掩码长度降序排列
+//leaf_info 指向具体的路由信息falh
+//
+//查找成功返回0，失败返回1
 static int check_leaf(struct fib_table *tb, struct trie *t, struct leaf *l,
 		      t_key key,  const struct flowi4 *flp,
 		      struct fib_result *res, int fib_flags)
@@ -1419,12 +1460,15 @@ static int check_leaf(struct fib_table *tb, struct trie *t, struct leaf *l,
 	struct hlist_head *hhead = &l->list;
 	struct hlist_node *node;
 
+	//leaf_info是按照掩码长度降序排列，这样可以保证符合最长前缀匹配
 	hlist_for_each_entry_rcu(li, node, hhead, hlist) {
 		struct fib_alias *fa;
 
+		//比较key,即目的地址
 		if (l->key != (key & li->mask_plen))
 			continue;
 
+		//比对路由项
 		list_for_each_entry_rcu(fa, &li->falh, fa_list) {
 			struct fib_info *fi = fa->fa_info;
 			int nhsel, err;
@@ -1432,15 +1476,18 @@ static int check_leaf(struct fib_table *tb, struct trie *t, struct leaf *l,
 			//比较tos
 			if (fa->fa_tos && fa->fa_tos != flp->flowi4_tos)
 				continue;
-			//检查当前路由信息是否可用
+
+			//是否活着，死掉的就不能用了
 			if (fi->fib_dead)
 				continue;
 
-			//到目的地址的scope必须大于或等于路由里面的scope
+			//路由scope必须要大于或等于搜索关键字提供的scope,
+			//scope标志到目的网络的距离
+			//这里是防止环回，代码里很多地方用到了scope。
 			if (fa->fa_info->fib_scope < flp->flowi4_scope)
 				continue;
 
-			//设置标志位
+			//设置fa_alias标志位，表明该fa已经有人接触过
 			fib_alias_accessed(fa);
 
 			//根据fa_type类型检查响应的错误码
@@ -1452,15 +1499,15 @@ static int check_leaf(struct fib_table *tb, struct trie *t, struct leaf *l,
 				return err;
 			}
 
-			//啥时候设置这个标志位
+			//表明下一跳是否可用，当设备down掉会设置这个标识
 			if (fi->fib_flags & RTNH_F_DEAD)
 				continue;
 
-			//如果存在多个下一跳
-			//这种情况要么是转发要么是发送，本地接受不需要考虑
+			//如果存在多个下一跳，选择一个
 			for (nhsel = 0; nhsel < fi->fib_nhs; nhsel++) {
 				const struct fib_nh *nh = &fi->fib_nh[nhsel];
 
+				//判断下一跳是否可用
 				if (nh->nh_flags & RTNH_F_DEAD)
 					continue;
 
@@ -1478,8 +1525,11 @@ static int check_leaf(struct fib_table *tb, struct trie *t, struct leaf *l,
 				res->fi = fi;
 				res->table = tb;
 				res->fa_head = &li->falh;
+
+				//fib_clntref表明路由查找匹配的次数
 				if (!(fib_flags & FIB_LOOKUP_NOREF))
 					atomic_inc(&fi->fib_clntref);
+					
 				return 0;
 			}
 		}
@@ -1496,14 +1546,14 @@ static int check_leaf(struct fib_table *tb, struct trie *t, struct leaf *l,
 int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 		     struct fib_result *res, int fib_flags)
 {
-	//将table转换成trie节点
+	//获取路由表trie根节点
 	struct trie *t = (struct trie *) tb->tb_data;
 	int ret;
 	struct rt_trie_node *n;
 	struct tnode *pn;
 	unsigned int pos, bits;
 
-	//关键字是目的地址
+	//提取比较关键字，即目的地址
 	t_key key = ntohl(flp->daddr);
 	unsigned int chopped_off;
 	t_key cindex = 0;
@@ -1515,11 +1565,13 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 
 	rcu_read_lock();
 
+	//如果路由树不存在，返回fail
 	n = rcu_dereference(t->trie);
 	if (!n)
 		goto failed;
 
 #ifdef CONFIG_IP_FIB_TRIE_STATS
+	//统计数据
 	t->stats.gets++;
 #endif
 
@@ -1536,10 +1588,13 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 		pos = pn->pos;
 		bits = pn->bits;
 
+		//pn的child数组元素个数为2<<(pn->bits),这里根据key来获取
+		//child[]指定元素
 		if (!chopped_off)
 			cindex = tkey_extract_bits(mask_pfx(key, current_prefix_length),
 						   pos, bits);
 
+		//获取孩子节点
 		n = tnode_get_child_rcu(pn, cindex);
 
 		if (n == NULL) {
@@ -1560,7 +1615,7 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 
 		/*
 		 * It's a tnode, and we can do some extra checks here if we
-		 * like, to avoid descending into a dead-end branch.
+		 * like, to avoid descending(下降) into a dead-end branch.
 		 * This tnode is in the parent's child array at index
 		 * key[p_pos..p_pos+p_bits] but potentially with some bits
 		 * chopped off, so in reality the index may be just a

@@ -2312,7 +2312,6 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	fl4.flowi4_mark = skb->mark;
 	fl4.flowi4_tos = tos;
 
-	//所有输入报文目的地址的scope都是UNIVERSE
 	fl4.flowi4_scope = RT_SCOPE_UNIVERSE;
 	fl4.daddr = daddr;
 	fl4.saddr = saddr;
@@ -2426,7 +2425,7 @@ no_route:
 	goto local_input;
 
 	/*
-	 *	Do not cache martian addresses: they should be logged (RFC1812)
+	 *	Do not cache martian addresses错误地址: they should be logged (RFC1812)
 	 */
 martian_destination:
 	RT_CACHE_STAT_INC(in_martian_dst);
@@ -2490,7 +2489,7 @@ int ip_route_input_common(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		    !rt_is_expired(rth)) {
 			ipv4_validate_peer(rth);
 
-			//noref区别，基本上其它设备发来的报文noref为ture
+			//noref区别，基本上外部设备发来的报文noref为ture
 			if (noref) {				
 				dst_use_noref(&rth->dst, jiffies);
 				//更新该缓存计数器和时间

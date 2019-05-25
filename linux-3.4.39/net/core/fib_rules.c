@@ -235,9 +235,11 @@ int fib_rules_lookup(struct fib_rules_ops *ops, struct flowi *fl,
 
 	list_for_each_entry_rcu(rule, &ops->rules_list, list) {
 jumped:
+		//根据报文信息去查找策略，并将查询到的策略保存到rule里
 		if (!fib_rule_match(rule, ops, fl, flags))
 			continue;
 
+		//跳过当前策略表，继续查找
 		if (rule->action == FR_ACT_GOTO) {
 			struct fib_rule *target;
 
@@ -248,10 +250,16 @@ jumped:
 				rule = target;
 				goto jumped;
 			}
-		} else if (rule->action == FR_ACT_NOP)
-			continue;
-		else
+		} else if (rule->action == FR_ACT_NOP){
+				//效果同上，继续查找
+				continue;
+		}
+		else{
+			//查询到了，根据策略执行相应的动作
+			//ops->action是虚函数指定，在路由子系统初始化的时候设定，
+			//ipv4里该函数时fib4_rule_action
 			err = ops->action(rule, fl, flags, arg);
+		}
 
 		if (err != -EAGAIN) {
 			if ((arg->flags & FIB_LOOKUP_NOREF) ||
@@ -293,6 +301,7 @@ errout:
 	return err;
 }
 
+//添加策略路由
 static int fib_nl_newrule(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 {
 	struct net *net = sock_net(skb->sk);
@@ -302,6 +311,7 @@ static int fib_nl_newrule(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 	struct nlattr *tb[FRA_MAX+1];
 	int err = -EINVAL, unresolved = 0;
 
+	//消息合法性检查
 	if (nlh->nlmsg_len < nlmsg_msg_size(sizeof(*frh)))
 		goto errout;
 
@@ -315,10 +325,12 @@ static int fib_nl_newrule(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 	if (err < 0)
 		goto errout;
 
+	//配置检查
 	err = validate_rulemsg(frh, tb, ops);
 	if (err < 0)
 		goto errout;
 
+	//申请策略缓存
 	rule = kzalloc(ops->rule_size, GFP_KERNEL);
 	if (rule == NULL) {
 		err = -ENOMEM;

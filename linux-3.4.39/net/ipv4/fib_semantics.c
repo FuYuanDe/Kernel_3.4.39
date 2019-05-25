@@ -351,6 +351,7 @@ struct fib_alias *fib_find_alias(struct list_head *fah, u8 tos, u32 prio)
 	if (fah) {
 		struct fib_alias *fa;
 		list_for_each_entry(fa, fah, fa_list) {
+			//falh是按照tos升序排列的，这里既然大于就继续查找后面的节点
 			if (fa->fa_tos > tos)
 				continue;
 			if (fa->fa_info->fib_priority >= prio ||
@@ -715,6 +716,7 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 	int nhs = 1;
 	struct net *net = cfg->fc_nlinfo.nl_net;
 
+	//类型，例如单播，本地，广播，黑洞...
 	if (cfg->fc_type > RTN_MAX)
 		goto err_inval;
 
@@ -734,7 +736,7 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 
 	err = -ENOBUFS;
 
-	//超出哈希表大小则扩容一倍，实际的扩容大小和系统页大小有关
+	//超出哈希表大小则扩容一倍，实际的扩容大小和系统页大小有关,不会无线扩大
 	if (fib_info_cnt >= fib_info_hash_size) {
 		unsigned int new_size = fib_info_hash_size << 1;
 		struct hlist_head *new_info_hash;
@@ -756,10 +758,12 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 			goto failure;
 	}
 
-	//分配一个新的fib_info结构体
+	//分配一个新的fib_info结构体，大小等于fi加上N*下一跳大小
 	fi = kzalloc(sizeof(*fi)+nhs*sizeof(struct fib_nh), GFP_KERNEL);
 	if (fi == NULL)
 		goto failure;
+
+	//处理一些变量
 	if (cfg->fc_mx) {
 		fi->fib_metrics = kzalloc(sizeof(u32) * RTAX_MAX, GFP_KERNEL);
 		if (!fi->fib_metrics)
@@ -814,6 +818,7 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 		goto err_inval;
 #endif
 	} else {
+		//配置下一跳
 		struct fib_nh *nh = fi->fib_nh;
 		//获取下一跳出口设备、网关
 		nh->nh_oif = cfg->fc_oif;
@@ -827,6 +832,7 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 #endif
 	}
 
+	//参数检查
 	if (fib_props[cfg->fc_type].error) {
 		if (cfg->fc_gw || cfg->fc_oif || cfg->fc_mp)
 			goto err_inval;
@@ -883,6 +889,8 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 
 link_it:
 	//如果存在旧的fib_info，则释放掉新建的fi_info，增加旧fib_info的引用计数
+	//检查是否存在相同的fib_info,如果存在的话直接使用就好了，这里有一个问题
+	//为啥不在创建之前检查呢
 	ofi = fib_find_info(fi);
 	if (ofi) {
 		fi->fib_dead = 1;
@@ -891,11 +899,16 @@ link_it:
 		return ofi;
 	}
 
+	//增加fib_info的统计计数
 	fi->fib_treeref++;
 	atomic_inc(&fi->fib_clntref);
+
+	//添加到全局的hash表中
 	spin_lock_bh(&fib_info_lock);
 	hlist_add_head(&fi->fib_hash,
 		       &fib_info_hash[fib_info_hashfn(fi)]);
+
+	//如果存在该字段还需要追加到另外一个链表中			   
 	if (fi->fib_prefsrc) {
 		struct hlist_head *head;
 
