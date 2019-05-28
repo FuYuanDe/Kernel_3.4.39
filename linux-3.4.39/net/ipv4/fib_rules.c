@@ -78,6 +78,7 @@ static int fib4_rule_action(struct fib_rule *rule, struct flowi *flp,
 	struct fib_table *tbl;
 
 	switch (rule->action) {
+	//查找路由表
 	case FR_ACT_TO_TBL:
 		break;
 
@@ -98,7 +99,7 @@ static int fib4_rule_action(struct fib_rule *rule, struct flowi *flp,
 		goto errout;
 	}
 
-	//获取指定路由表指针
+	//根据路由表ID获取指定路由表指针
 	tbl = fib_get_table(rule->fr_net, rule->table);
 	if (!tbl)
 		goto errout;
@@ -260,8 +261,8 @@ static const struct fib_rules_ops __net_initdata fib4_rules_ops_template = {
 	.family		= AF_INET,
 	.rule_size	= sizeof(struct fib4_rule),
 	.addr_size	= sizeof(u32),
-	.action		= fib4_rule_action,
-	.match		= fib4_rule_match,
+	.action		= fib4_rule_action,	//匹配后的动作
+	.match		= fib4_rule_match,  //判断是否匹配
 	.configure	= fib4_rule_configure,
 	.compare	= fib4_rule_compare,
 	.fill		= fib4_rule_fill,
@@ -273,6 +274,7 @@ static const struct fib_rules_ops __net_initdata fib4_rules_ops_template = {
 	.owner		= THIS_MODULE,
 };
 
+//初始化三张策略表，0标识优先级最高
 static int fib_default_rules_init(struct fib_rules_ops *ops)
 {
 	int err;
@@ -295,12 +297,14 @@ int __net_init fib4_rules_init(struct net *net)
 	int err;
 	struct fib_rules_ops *ops;
 
+	//注册策略虚函数集，关于策略的很多操作都在这里
 	ops = fib_rules_register(&fib4_rules_ops_template, net);
 	if (IS_ERR(ops))
 		return PTR_ERR(ops);
 
+	//初始化默认策略，0，32766，32767
 	err = fib_default_rules_init(ops);
-	if (err < 0)
+	if (err < 0)的
 		goto fail;
 	net->ipv4.rules_ops = ops;
 	return 0;

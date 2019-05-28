@@ -2476,7 +2476,7 @@ int ip_route_input_common(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	//输入hash值的计算由src、dst、iif和随机量组成
 	hash = rt_hash(daddr, saddr, iif, rt_genid(net));
 
-    //查找路由缓存
+    //查找路由缓存，找不到就查找路由表
 	for (rth = rcu_dereference(rt_hash_table[hash].chain); rth;
 	     rth = rcu_dereference(rth->dst.rt_next)) {
 	        //比较地址，设备，tos，mark
@@ -2851,7 +2851,7 @@ out:
 	return rth;
 }
 
-//查找路由表
+//查找路由，先查找路由缓存，查找不到再查找路由表
 struct rtable *__ip_route_output_key(struct net *net, struct flowi4 *flp4)
 {
 	struct rtable *rth;
@@ -2883,6 +2883,8 @@ struct rtable *__ip_route_output_key(struct net *net, struct flowi4 *flp4)
 				flp4->saddr = rth->rt_src;
 			if (!flp4->daddr)
 				flp4->daddr = rth->rt_dst;
+
+			//缓存匹配则返回	
 			return rth;
 		}
 		RT_CACHE_STAT_INC(out_hlist_search);
@@ -2890,6 +2892,7 @@ struct rtable *__ip_route_output_key(struct net *net, struct flowi4 *flp4)
 	rcu_read_unlock_bh();
 
 slow_output:
+	//查找路由表
 	return ip_route_output_slow(net, flp4);
 }
 EXPORT_SYMBOL_GPL(__ip_route_output_key);
@@ -3534,6 +3537,7 @@ int __init ip_rt_init(void)
 	devinet_init();
 
 	//注册通知链和创建alias缓存
+	//策略路由初始化
 	ip_fib_init();
 
 	//注册gc任务

@@ -1030,7 +1030,10 @@ static void trie_rebalance(struct trie *t, struct tnode *tn)
 	key = tn->key;
 
 	while (tn != NULL && (tp = node_parent((struct rt_trie_node *)tn)) != NULL) {
+		//tn在tpchild数组中的下表
 		cindex = tkey_extract_bits(key, tp->pos, tp->bits);
+
+		//tn是否是full孩子节点
 		wasfull = tnode_full(tp, tnode_get_child(tp, cindex));
 		tn = (struct tnode *) resize(t, (struct tnode *)tn);
 
@@ -1211,7 +1214,7 @@ static struct list_head *fib_insert_node(struct trie *t, u32 key, int plen)
 		//获取新节点在child数组中的位置
 		missbit = tkey_extract_bits(key, newpos, 1);
 
-		//将原来的节点插入进来
+		//将新节点插入进来
 		put_child(t, tn, missbit, (struct rt_trie_node *)l);
 
 		//将原有节点插入进来，n可以是NULL.
@@ -2103,12 +2106,15 @@ int fib_table_dump(struct fib_table *tb, struct sk_buff *skb,
 	return skb->len;
 }
 
+//缓存的初始化
 void __init fib_trie_init(void)
 {
+	//初始化路由表项fa_alias缓存池
 	fn_alias_kmem = kmem_cache_create("ip_fib_alias",
 					  sizeof(struct fib_alias),
 					  0, SLAB_PANIC, NULL);
 
+	//初始化叶子节点缓存池
 	trie_leaf_kmem = kmem_cache_create("ip_fib_trie",
 					   max(sizeof(struct leaf),
 					       sizeof(struct leaf_info)),

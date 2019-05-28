@@ -570,12 +570,14 @@ int ip6_find_1stfragopt(struct sk_buff *skb, u8 **nexthdr)
 	while (offset + 1 <= packet_len) {
 
 		switch (**nexthdr) {
-
+		//逐条选项
 		case NEXTHDR_HOP:
 			break;
+		//路由选项	
 		case NEXTHDR_ROUTING:
 			found_rhdr = 1;
 			break;
+		//目的地选项	
 		case NEXTHDR_DEST:
 #if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
 			if (ipv6_find_tlv(skb, offset, IPV6_TLV_HAO) >= 0)
@@ -584,6 +586,7 @@ int ip6_find_1stfragopt(struct sk_buff *skb, u8 **nexthdr)
 			if (found_rhdr)
 				return offset;
 			break;
+		//其它扩展选项	
 		default :
 			return offset;
 		}
@@ -639,6 +642,7 @@ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 	hlen = ip6_find_1stfragopt(skb, &prevhdr);
 	nexthdr = *prevhdr;
 
+	//获取mtu大小
 	mtu = ip6_skb_dst_mtu(skb);
 
 	/* We must not fragment if the socket is set to force MTU discovery
@@ -653,23 +657,34 @@ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 		return -EMSGSIZE;
 	}
 
+	//获取mtu大小
 	if (np && np->frag_size < mtu) {
 		if (np->frag_size)
 			mtu = np->frag_size;
 	}
+
+	//hlen表示每个分片报文都必须携带的扩展选项头
 	mtu -= hlen + sizeof(struct frag_hdr);
 
+	//判断是否存在分片队列，存在的话说明应用层可以已经帮忙分片了，这时候只需要检查
+	//分片的长度是否合法，合法的话则可以使用快速分片。
 	if (skb_has_frag_list(skb)) {
 		int first_len = skb_pagelen(skb);
 		struct sk_buff *frag2;
 
+		//如果第一个报文长度大于MTU或者长度不是8字节的整数倍
+		//克隆的报文也不能使用快速分片。
 		if (first_len - hlen > mtu ||
 		    ((first_len - hlen) & 7) ||
 		    skb_cloned(skb))
 			goto slow_path;
 
+		//检查分片是否满足快速分片要求
 		skb_walk_frags(skb, frag) {
 			/* Correct geometry. */
+			//首先是长度不能大于MTU
+			//此外除了最后一个报文其它报文长度必须是8字节整数倍
+			//当然首部空间不够的话也不行
 			if (frag->len > mtu ||
 			    ((frag->len & 7) && frag->next) ||
 			    skb_headroom(frag) < hlen)
@@ -684,11 +699,17 @@ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 				frag->sk = skb->sk;
 				frag->destructor = sock_wfree;
 			}
+
+			//报文要各自为战了，所以从第一个报文那个分出来。
+			//这么做是因为发送的时候需要将报文所占大小还给系统。
+			//每个报文返还自己的。
 			skb->truesize -= frag->truesize;
 		}
 
 		err = 0;
 		offset = 0;
+
+		//将分片从skb链表上挂载到frag上。
 		frag = skb_shinfo(skb)->frag_list;
 		skb_frag_list_init(skb);
 		/* BUILD HEADER */
@@ -701,37 +722,48 @@ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 			return -ENOMEM;
 		}
 
+		//追加一个分片头
 		__skb_pull(skb, hlen);
 		fh = (struct frag_hdr*)__skb_push(skb, sizeof(struct frag_hdr));
 		__skb_push(skb, hlen);
 		skb_reset_network_header(skb);
 		memcpy(skb_network_header(skb), tmp_hdr, hlen);
 
+		//选择一个报文ID标识
 		ipv6_select_ident(fh, rt);
+
+		//设置分片扩展选项
 		fh->nexthdr = nexthdr;
 		fh->reserved = 0;
 		fh->frag_off = htons(IP6_MF);
 		frag_id = fh->identification;
 
+		//重新调整长度
 		first_len = skb_pagelen(skb);
 		skb->data_len = first_len - skb_headlen(skb);
 		skb->len = first_len;
 		ipv6_hdr(skb)->payload_len = htons(first_len -
 						   sizeof(struct ipv6hdr));
 
+		//增加路由统计计数
 		dst_hold(&rt->dst);
 
 		for (;;) {
 			/* Prepare header of the next frame,
 			 * before previous one went down. */
+			//处理其它分片报文 
 			if (frag) {
 				frag->ip_summed = CHECKSUM_NONE;
 				skb_reset_transport_header(frag);
+
+				//添加分片扩展选项
 				fh = (struct frag_hdr*)__skb_push(frag, sizeof(struct frag_hdr));
 				__skb_push(frag, hlen);
 				skb_reset_network_header(frag);
 				memcpy(skb_network_header(frag), tmp_hdr,
 				       hlen);
+
+				//调整选项头       
 				offset += skb->len - hlen - sizeof(struct frag_hdr);
 				fh->nexthdr = nexthdr;
 				fh->reserved = 0;
@@ -745,6 +777,8 @@ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 				ip6_copy_metadata(frag, skb);
 			}
 
+			//先将上一个报文发送出去
+			//分片报文按照处理的顺序发送出去
 			err = output(skb);
 			if(!err)
 				IP6_INC_STATS(net, ip6_dst_idev(&rt->dst),
@@ -760,6 +794,7 @@ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 
 		kfree(tmp_hdr);
 
+		//分片成功则返回
 		if (err == 0) {
 			IP6_INC_STATS(net, ip6_dst_idev(&rt->dst),
 				      IPSTATS_MIB_FRAGOKS);
@@ -767,14 +802,18 @@ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 			return 0;
 		}
 
+		//走到这里说明发送那里出现了错误，功亏一篑，剩下的报文原地解散回家去吧
 		while (frag) {
 			skb = frag->next;
 			kfree_skb(frag);
 			frag = skb;
 		}
 
+		//失败的统计计数
 		IP6_INC_STATS(net, ip6_dst_idev(&rt->dst),
 			      IPSTATS_MIB_FRAGFAILS);
+
+		//释放占用的路由指针	      
 		dst_release(&rt->dst);
 		return err;
 
@@ -789,6 +828,9 @@ slow_path_clean:
 	}
 
 slow_path:
+	//慢速通道，需要重新分配skb
+
+	//left表示分片报文数据部分总长度
 	left = skb->len - hlen;		/* Space per frame */
 	ptr = hlen;			/* Where to start from */
 
@@ -797,6 +839,8 @@ slow_path:
 	 */
 
 	*prevhdr = NEXTHDR_FRAGMENT;
+
+	//预留链路层头部长度
 	hroom = LL_RESERVED_SPACE(rt->dst.dev);
 	troom = rt->dst.dev->needed_tailroom;
 
@@ -806,17 +850,20 @@ slow_path:
 	while(left > 0)	{
 		len = left;
 		/* IF: it doesn't fit, use 'mtu' - the data space left */
+		//分片长度最大时mtu
 		if (len > mtu)
 			len = mtu;
 		/* IF: we are not sending up to and including the packet end
 		   then align the next start on an eight byte boundary */
+
+		//除了最后一个分片报文，其它报文长度必须是8字节整数倍   
 		if (len < left)	{
 			len &= ~7;
 		}
 		/*
 		 *	Allocate buffer.
 		 */
-
+		//分配一个SKB，果然是慢速，快速已经分配好了直接发送就可以了。
 		if ((frag = alloc_skb(len + hlen + sizeof(struct frag_hdr) +
 				      hroom + troom, GFP_ATOMIC)) == NULL) {
 			NETDEBUG(KERN_INFO "IPv6: frag: no memory for new fragment!\n");
@@ -830,6 +877,7 @@ slow_path:
 		 *	Set up data on packet
 		 */
 
+		//重新分配数据
 		ip6_copy_metadata(frag, skb);
 		skb_reserve(frag, hroom);
 		skb_put(frag, len + hlen + sizeof(struct frag_hdr));
@@ -853,6 +901,7 @@ slow_path:
 		/*
 		 *	Build fragment header.
 		 */
+		//配置分片选项头 
 		fh->nexthdr = nexthdr;
 		fh->reserved = 0;
 		if (!frag_id) {
@@ -864,10 +913,12 @@ slow_path:
 		/*
 		 *	Copy a block of the IP datagram.
 		 */
+		//复制其它数据 
 		if (skb_copy_bits(skb, ptr, skb_transport_header(frag), len))
 			BUG();
 		left -= len;
 
+		//设置分片选项头
 		fh->frag_off = htons(offset);
 		if (left > 0)
 			fh->frag_off |= htons(IP6_MF);
@@ -880,6 +931,7 @@ slow_path:
 		/*
 		 *	Put this fragment into the sending queue.
 		 */
+		//发送报文 
 		err = output(frag);
 		if (err)
 			goto fail;

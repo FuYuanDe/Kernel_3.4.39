@@ -815,6 +815,7 @@ static struct pernet_operations fib_rules_net_ops = {
 static int __init fib_rules_init(void)
 {
 	int err;
+	//注册应用层配置命令，添加、删除和dump
 	rtnl_register(PF_UNSPEC, RTM_NEWRULE, fib_nl_newrule, NULL, NULL);
 	rtnl_register(PF_UNSPEC, RTM_DELRULE, fib_nl_delrule, NULL, NULL);
 	rtnl_register(PF_UNSPEC, RTM_GETRULE, NULL, fib_nl_dumprule, NULL);
@@ -823,6 +824,7 @@ static int __init fib_rules_init(void)
 	if (err < 0)
 		goto fail;
 
+	//注册事件通知链，监听其它子系统异常信息
 	err = register_netdevice_notifier(&fib_rules_notifier);
 	if (err < 0)
 		goto fail_unregister;

@@ -199,8 +199,7 @@ static inline int fib_lookup(struct net *net, const struct flowi4 *flp,
 			     struct fib_result *res)
 {
 	struct fib_table *table;
-
-	//先从本地表查起，话说本地表是如何初始化的？
+	
 	//这个函数就是获取指定tableID的指针
 	table = fib_get_table(net, RT_TABLE_LOCAL);
 

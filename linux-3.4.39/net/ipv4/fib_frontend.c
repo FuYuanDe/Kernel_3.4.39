@@ -443,26 +443,34 @@ int ip_rt_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 	int err;
 
 	switch (cmd) {
+	//添加路由
 	case SIOCADDRT:		/* Add a route */
+
+	//删除路由
 	case SIOCDELRT:		/* Delete a route */
 		if (!capable(CAP_NET_ADMIN))
 			return -EPERM;
 
+		//复制应用层数据
 		if (copy_from_user(&rt, arg, sizeof(rt)))
 			return -EFAULT;
 
 		rtnl_lock();
+
+		//将应用层数据转换成路由子系统可识别的结构体
 		err = rtentry_to_fib_config(net, cmd, &rt, &cfg);
 		if (err == 0) {
 			struct fib_table *tb;
 
 			if (cmd == SIOCDELRT) {
+				//删除操作
 				tb = fib_get_table(net, cfg.fc_table);
 				if (tb)
 					err = fib_table_delete(tb, &cfg);
 				else
 					err = -ESRCH;
 			} else {
+				//添加操作
 				tb = fib_new_table(net, cfg.fc_table);
 				if (tb)
 					err = fib_table_insert(tb, &cfg);
@@ -1084,7 +1092,7 @@ static int __net_init ip_fib_net_init(struct net *net)
 	if (net->ipv4.fib_table_hash == NULL)
 		return -ENOMEM;
 
-	//分为支持策略路由和不支持两种
+	//初始化策略路由和路由表
 	err = fib4_rules_init(net);
 	if (err < 0)
 		goto fail;
@@ -1160,15 +1168,20 @@ static struct pernet_operations fib_net_ops = {
 	.exit = fib_net_exit,
 };
 
-void __init ip_fib_init(void)
-{
-	rtnl_register(PF_INET, RTM_NEWROUTE, inet_rtm_newroute, NULL, NULL);
-	rtnl_register(PF_INET, RTM_DELROUTE, inet_rtm_delroute, NULL, NULL);
-	rtnl_register(PF_INET, RTM_GETROUTE, NULL, inet_dump_fib, NULL);
+	void __init ip_fib_init(void)
+	{
+		//注册netlink路由添加、删除和dump命令处理函数
+		rtnl_register(PF_INET, RTM_NEWROUTE, inet_rtm_newroute, NULL, NULL);
+		rtnl_register(PF_INET, RTM_DELROUTE, inet_rtm_delroute, NULL, NULL);
+		rtnl_register(PF_INET, RTM_GETROUTE, NULL, inet_dump_fib, NULL);
 
-	register_pernet_subsys(&fib_net_ops);
-	register_netdevice_notifier(&fib_netdev_notifier);
-	register_inetaddr_notifier(&fib_inetaddr_notifier);
+		//初始化路由表和路由缓存
+		register_pernet_subsys(&fib_net_ops);
 
-	fib_trie_init();
-}
+		//注册通知链处理函数，监听系统其它模块信息
+		register_netdevice_notifier(&fib_netdev_notifier);
+		register_inetaddr_notifier(&fib_inetaddr_notifier);
+
+		//初始化路由用到的缓存池
+		fib_trie_init();
+	}

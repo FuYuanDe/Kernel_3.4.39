@@ -1544,7 +1544,7 @@ void ip_send_reply(struct sock *sk, struct sk_buff *skb, __be32 daddr,
 	ip_rt_put(rt);
 }
 
-void __init ip_init(void)
+void __init ip_init(voicd)
 {
 	ip_rt_init();
 	inet_initpeers();
