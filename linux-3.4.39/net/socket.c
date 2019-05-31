@@ -156,6 +156,8 @@ static const struct file_operations socket_file_ops = {
  */
 
 static DEFINE_SPINLOCK(net_family_lock);
+
+//地址协议族
 static const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
 
 /*
@@ -332,6 +334,7 @@ static struct file_system_type sock_fs_type = {
 /*
  *	Obtains the first available file descriptor and sets it up for use.
  *
+ * 申请一个文件结构体然后将它映射到当前进程的fd空间中
  *	These functions create file structures and maps them to fd space
  *	of the current process. On success it returns file descriptor
  *	and file struct implicitly stored in sock->file.
@@ -386,6 +389,7 @@ static int sock_alloc_file(struct socket *sock, struct file **f, int flags)
 	return fd;
 }
 
+//绑定文件描述符和套接字
 int sock_map_fd(struct socket *sock, int flags)
 {
 	struct file *newfile;
@@ -462,6 +466,7 @@ static struct socket *sockfd_lookup_light(int fd, int *err, int *fput_needed)
  *	NULL is returned.
  */
 
+//分配一个socket结构体
 static struct socket *sock_alloc(void)
 {
 	struct inode *inode;
@@ -550,17 +555,20 @@ EXPORT_SYMBOL(sock_tx_timestamp);
 static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 				       struct msghdr *msg, size_t size)
 {
+	/* 获得套接字在sock_sendmsg中设置的IO请求， */
 	struct sock_iocb *si = kiocb_to_siocb(iocb);
 
 	sock_update_classid(sock->sk);
 
 	sock_update_netprioidx(sock->sk);
-
+	
+	/* 初始化套接字的IO请求字段 */
 	si->sock = sock;
 	si->scm = NULL;
 	si->msg = msg;
 	si->size = size;
 
+	/* 根据不同的套接字类型，调用其发送数据函数 */
 	return sock->ops->sendmsg(iocb, sock, msg, size);
 }
 
@@ -574,13 +582,17 @@ static inline int __sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 
 int sock_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 {
+	/* kiocb为内核通用的IO请求结构 */
 	struct kiocb iocb;
 	struct sock_iocb siocb;
 	int ret;
 
+	/* 初始化同步的内核IO请求结构 */
 	init_sync_kiocb(&iocb, NULL);
 	iocb.private = &siocb;
+	/* 发送消息 */
 	ret = __sock_sendmsg(&iocb, sock, msg, size);
+	/* 返回结果表明该消息已经加入队列，要等待完成事件 */
 	if (-EIOCBQUEUED == ret)
 		ret = wait_on_sync_kiocb(&iocb);
 	return ret;
@@ -719,13 +731,13 @@ static inline int __sock_recvmsg_nosec(struct kiocb *iocb, struct socket *sock,
 	struct sock_iocb *si = kiocb_to_siocb(iocb);
 
 	sock_update_classid(sock->sk);
-
+	/* 设置套接字异步IO信息 */
 	si->sock = sock;
 	si->scm = NULL;
 	si->msg = msg;
 	si->size = size;
 	si->flags = flags;
-
+	/* 根据不同的套接字类型，调用不同的数据接收函数 */
 	return sock->ops->recvmsg(iocb, sock, msg, size, flags);
 }
 
@@ -1206,8 +1218,11 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	/*
 	 *      Check protocol is in range
 	 */
+	//检查协议是否正确 
 	if (family < 0 || family >= NPROTO)
 		return -EAFNOSUPPORT;
+
+	//检查类型是否正确
 	if (type < 0 || type >= SOCK_MAX)
 		return -EINVAL;
 
@@ -1226,6 +1241,7 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 		family = PF_PACKET;
 	}
 
+	//这里没有做任何处理
 	err = security_socket_create(family, type, protocol, kern);
 	if (err)
 		return err;
@@ -1243,6 +1259,7 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 				   closest posix thing */
 	}
 
+	//设置套接字类型
 	sock->type = type;
 
 #ifdef CONFIG_MODULES
@@ -1272,6 +1289,7 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	/* Now protected by module ref count */
 	rcu_read_unlock();
 
+	//调用协议注册的创建函数
 	err = pf->create(net, sock, protocol, kern);
 	if (err < 0)
 		goto out_module_put;
@@ -1288,6 +1306,7 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	 * module can have its refcnt decremented
 	 */
 	module_put(pf->owner);
+	//do nothing
 	err = security_socket_post_create(sock, family, type, protocol, kern);
 	if (err)
 		goto out_sock_release;
@@ -1322,26 +1341,31 @@ int sock_create_kern(int family, int type, int protocol, struct socket **res)
 }
 EXPORT_SYMBOL(sock_create_kern);
 
+//socket调用
 SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
 {
 	int retval;
-	struct socket *sock;
+	struct socket *sock;	//通用套接字结构
 	int flags;
 
 	/* Check the SOCK_* constants for consistency.  */
+	//检查
 	BUILD_BUG_ON(SOCK_CLOEXEC != O_CLOEXEC);
 	BUILD_BUG_ON((SOCK_MAX | SOCK_TYPE_MASK) != SOCK_TYPE_MASK);
 	BUILD_BUG_ON(SOCK_CLOEXEC & SOCK_TYPE_MASK);
 	BUILD_BUG_ON(SOCK_NONBLOCK & SOCK_TYPE_MASK);
 
+	
 	flags = type & ~SOCK_TYPE_MASK;
 	if (flags & ~(SOCK_CLOEXEC | SOCK_NONBLOCK))
 		return -EINVAL;
+		
 	type &= SOCK_TYPE_MASK;
 
 	if (SOCK_NONBLOCK != O_NONBLOCK && (flags & SOCK_NONBLOCK))
 		flags = (flags & ~SOCK_NONBLOCK) | O_NONBLOCK;
 
+	//创建一个套接字
 	retval = sock_create(family, type, protocol, &sock);
 	if (retval < 0)
 		goto out;
@@ -1450,14 +1474,20 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
 	struct sockaddr_storage address;
 	int err, fput_needed;
 
+	/* 由文件描述符得到套接字在内核中对应的结构struct socket */
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (sock) {
+	
+		/* umyaddr是用户空间地址，这里将其复制到内核空间address变量中 */
 		err = move_addr_to_kernel(umyaddr, addrlen, &address);
+		
 		if (err >= 0) {
+			/* 对bind动作进行安全性检查 */ 
 			err = security_socket_bind(sock,
 						   (struct sockaddr *)&address,
 						   addrlen);
 			if (!err)
+				/* 调用对应协议的bind动作 */
 				err = sock->ops->bind(sock,
 						      (struct sockaddr *)
 						      &address, addrlen);
@@ -1605,18 +1635,23 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
 	struct sockaddr_storage address;
 	int err, fput_needed;
 
+	/* 通过套接字文件描述符获得对应的struct socket */
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (!sock)
 		goto out;
+
+	/* 将用户空间地址复制到内核空间变量address中 */	
 	err = move_addr_to_kernel(uservaddr, addrlen, &address);
 	if (err < 0)
 		goto out_put;
 
+	/* 安全性检查 */
 	err =
 	    security_socket_connect(sock, (struct sockaddr *)&address, addrlen);
 	if (err)
 		goto out_put;
 
+	/* 与bind类似，调用与协议族对应的connect操作函数 */
 	err = sock->ops->connect(sock, (struct sockaddr *)&address, addrlen,
 				 sock->file->f_flags);
 out_put:
@@ -1703,13 +1738,17 @@ SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
 	struct msghdr msg;
 	struct iovec iov;
 	int fput_needed;
-
+	
+	/* 长度合法性检查 */
 	if (len > INT_MAX)
 		len = INT_MAX;
+
+	/* 从文件描述符获得套接字socket的结构 */	
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (!sock)
 		goto out;
 
+	/* 将数据转换为iovec结构，来调用后面的sendmsg */
 	iov.iov_base = buff;
 	iov.iov_len = len;
 	msg.msg_name = NULL;
@@ -1718,16 +1757,23 @@ SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
 	msg.msg_control = NULL;
 	msg.msg_controllen = 0;
 	msg.msg_namelen = 0;
+	
+	/* 如果设置了地址，则设置msg_name */
 	if (addr) {
+		/* 将地址参数复制到内核变量中 */
 		err = move_addr_to_kernel(addr, addr_len, &address);
 		if (err < 0)
 			goto out_put;
 		msg.msg_name = (struct sockaddr *)&address;
 		msg.msg_namelen = addr_len;
 	}
+
+	/* 如果socket设置了非阻塞，则消息的标志设置为DONTWAIT（其实也是非阻塞的语义）*/
 	if (sock->file->f_flags & O_NONBLOCK)
 		flags |= MSG_DONTWAIT;
 	msg.msg_flags = flags;
+
+	/* 调用sock_sendmsg来发送数据包 */
 	err = sock_sendmsg(sock, &msg, len);
 
 out_put:
@@ -1743,6 +1789,10 @@ out:
 SYSCALL_DEFINE4(send, int, fd, void __user *, buff, size_t, len,
 		unsigned, flags)
 {
+	/*
+		send可以视为sendto的一种特例，即不设置目的地址的sendto调用。
+		所以内核实现也是让send直接调用sendto。
+	*/
 	return sys_sendto(fd, buff, len, flags, NULL, 0);
 }
 
@@ -1763,25 +1813,33 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
 	int err, err2;
 	int fput_needed;
 
+	/* 限制读取字节长度的最大值为整数的最大值INT_MAX */
 	if (size > INT_MAX)
 		size = INT_MAX;
+	/* 从文件描述符得到套接字结构 */
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (!sock)
 		goto out;
-
+		
+	/* 控制信息清零 */
 	msg.msg_control = NULL;
 	msg.msg_controllen = 0;
+	/* 设置消息的数据段信息 */
 	msg.msg_iovlen = 1;
 	msg.msg_iov = &iov;
 	iov.iov_len = size;
 	iov.iov_base = ubuf;
+	/* 设置消息的存储地址信息 */
 	msg.msg_name = (struct sockaddr *)&address;
 	msg.msg_namelen = sizeof(address);
+	/* 如果套接字设置了O_NONBLOCK标志，即非阻塞标志，则设置MSG_DONTWAIT标志，表示此次接收消息，无须等待 */
 	if (sock->file->f_flags & O_NONBLOCK)
 		flags |= MSG_DONTWAIT;
+	/* 调用sock_recvmsg接收数据 */	
 	err = sock_recvmsg(sock, &msg, size, flags);
 
 	if (err >= 0 && addr != NULL) {
+		/* 将地址信息复制到用户空间 */
 		err2 = move_addr_to_user(&address,
 					 msg.msg_namelen, addr, addr_len);
 		if (err2 < 0)
@@ -1914,7 +1972,9 @@ static int __sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 	int err, ctl_len, iov_size, total_len;
 
 	err = -EFAULT;
+	/* 从用户空间得到用户消息 */
 	if (MSG_CMSG_COMPAT & flags) {
+		/* 紧凑消息类型 */
 		if (get_compat_msghdr(msg_sys, msg_compat))
 			return -EFAULT;
 	} else if (copy_from_user(msg_sys, msg, sizeof(struct msghdr)))
@@ -1922,11 +1982,13 @@ static int __sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 
 	/* do not move before msg_sys is valid */
 	err = -EMSGSIZE;
+	/* 消息数据块个数检查 */
 	if (msg_sys->msg_iovlen > UIO_MAXIOV)
 		goto out;
 
 	/* Check whether to allocate the iovec area */
 	err = -ENOMEM;
+	/* 在内核空间申请消息数据长度 */
 	iov_size = msg_sys->msg_iovlen * sizeof(struct iovec);
 	if (msg_sys->msg_iovlen > UIO_FASTIOV) {
 		iov = sock_kmalloc(sock->sk, iov_size, GFP_KERNEL);
@@ -1935,6 +1997,8 @@ static int __sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 	}
 
 	/* This will also move the address data into kernel space */
+	 /* 前面只是将消息头，或者说消息的结构体，复制到内核空间，现在是将消息的真正内容，
+	 即iov的内容复制到内核空间 */
 	if (MSG_CMSG_COMPAT & flags) {
 		err = verify_compat_iovec(msg_sys, iov, &address, VERIFY_READ);
 	} else
@@ -1944,7 +2008,7 @@ static int __sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 	total_len = err;
 
 	err = -ENOBUFS;
-
+	/* 与消息数据块类似，复制控制消息块，就不详细描述了 */
 	if (msg_sys->msg_controllen > INT_MAX)
 		goto out_freeiov;
 	ctl_len = msg_sys->msg_controllen;
@@ -1972,10 +2036,13 @@ static int __sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 				   (void __user __force *)msg_sys->msg_control,
 				   ctl_len))
 			goto out_freectl;
+
 		msg_sys->msg_control = ctl_buf;
 	}
+	/* 设置消息标志 */
 	msg_sys->msg_flags = flags;
 
+	/* 如果套接字是非阻塞的，则设置消息标志MSG_DONTWAIT */
 	if (sock->file->f_flags & O_NONBLOCK)
 		msg_sys->msg_flags |= MSG_DONTWAIT;
 	/*
@@ -1984,18 +2051,23 @@ static int __sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 	 * used_address->name_len is initialized to UINT_MAX so that the first
 	 * destination address never matches.
 	 */
+	/* 如果这次发送的目的地址与上次成功发送的目的地址一致，那就可以省略安全性检查 */ 
 	if (used_address && msg_sys->msg_name &&
 	    used_address->name_len == msg_sys->msg_namelen &&
 	    !memcmp(&used_address->name, msg_sys->msg_name,
 		    used_address->name_len)) {
+		/* 调用不进行安全性检查的函数 */
 		err = sock_sendmsg_nosec(sock, msg_sys, total_len);
 		goto out_freectl;
 	}
+
+	/* 调用sock_sendmsg，需要安全性检查，最终仍然会调用到sock_send_msg_nosec函数 */
 	err = sock_sendmsg(sock, msg_sys, total_len);
 	/*
 	 * If this is sendmmsg() and sending to current destination address was
 	 * successful, remember it.
 	 */
+	/* 如果本次发送成功，则保存当前的目的地址 */ 
 	if (used_address && err >= 0) {
 		used_address->name_len = msg_sys->msg_namelen;
 		if (msg_sys->msg_name)
@@ -2021,11 +2093,14 @@ SYSCALL_DEFINE3(sendmsg, int, fd, struct msghdr __user *, msg, unsigned, flags)
 {
 	int fput_needed, err;
 	struct msghdr msg_sys;
+
+	/* 通过文件描述符获得socket套接字结构 */
 	struct socket *sock = sockfd_lookup_light(fd, &err, &fput_needed);
 
 	if (!sock)
 		goto out;
-
+		
+	/* 调用__sys_sendmsg来发送数据包 */
 	err = __sys_sendmsg(sock, msg, &msg_sys, flags, NULL);
 
 	fput_light(sock->file, fput_needed);
@@ -2051,7 +2126,7 @@ int __sys_sendmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 		vlen = UIO_MAXIOV;
 
 	datagrams = 0;
-
+	/* 通过文件描述符获得socket套接字结构 */
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (!sock)
 		return err;
@@ -2062,7 +2137,9 @@ int __sys_sendmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 	err = 0;
 
 	while (datagrams < vlen) {
+		/* 从用户空间得到用户消息 */
 		if (MSG_CMSG_COMPAT & flags) {
+			/* 紧凑消息类型 */
 			err = __sys_sendmsg(sock, (struct msghdr __user *)compat_entry,
 					    &msg_sys, flags, &used_address);
 			if (err < 0)
@@ -2095,6 +2172,7 @@ int __sys_sendmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 SYSCALL_DEFINE4(sendmmsg, int, fd, struct mmsghdr __user *, mmsg,
 		unsigned int, vlen, unsigned int, flags)
 {
+	/* 调用__sys_sendmsg来发送数据包 */
 	return __sys_sendmmsg(fd, mmsg, vlen, flags);
 }
 
@@ -2115,6 +2193,7 @@ static int __sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
 	struct sockaddr __user *uaddr;
 	int __user *uaddr_len;
 
+	/* 将消息头从用户空间复制到内核空间 */
 	if (MSG_CMSG_COMPAT & flags) {
 		if (get_compat_msghdr(msg_sys, msg_compat))
 			return -EFAULT;
@@ -2122,11 +2201,14 @@ static int __sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
 		return -EFAULT;
 
 	err = -EMSGSIZE;
+	/* 检查数据段的个数 */
 	if (msg_sys->msg_iovlen > UIO_MAXIOV)
 		goto out;
 
 	/* Check whether to allocate the iovec area */
 	err = -ENOMEM;
+	 /*
+    为了避免频繁申请内存，内核在栈上申请了UIO_FASTIOV大小的iovec数组以供iov使用。当数据段个数超过UIO_FASTIOV时，就需要动态申请内存。*/
 	iov_size = msg_sys->msg_iovlen * sizeof(struct iovec);
 	if (msg_sys->msg_iovlen > UIO_FASTIOV) {
 		iov = sock_kmalloc(sock->sk, iov_size, GFP_KERNEL);
@@ -2138,7 +2220,7 @@ static int __sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
 	 *      Save the user-mode address (verify_iovec will change the
 	 *      kernel msghdr to use the kernel address space)
 	 */
-
+	/* 验证用户传递的数据段参数和地址参数 */
 	uaddr = (__force void __user *)msg_sys->msg_name;
 	uaddr_len = COMPAT_NAMELEN(msg);
 	if (MSG_CMSG_COMPAT & flags) {
@@ -2150,16 +2232,19 @@ static int __sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
 	total_len = err;
 
 	cmsg_ptr = (unsigned long)msg_sys->msg_control;
+	/* 确保消息标志中只有内核支持的两个标志 */
 	msg_sys->msg_flags = flags & (MSG_CMSG_CLOEXEC|MSG_CMSG_COMPAT);
-
+	/* 如果套接字为非阻塞，则设置标志位为不等待（非阻塞） */
 	if (sock->file->f_flags & O_NONBLOCK)
 		flags |= MSG_DONTWAIT;
+	/* 根据安全检查标志，调用不同的接收函数，但最终都会调用到sock_recvmsg */
 	err = (nosec ? sock_recvmsg_nosec : sock_recvmsg)(sock, msg_sys,
 							  total_len, flags);
 	if (err < 0)
 		goto out_freeiov;
 	len = err;
 
+	/* 将发送端的地址复制到用户空间 */
 	if (uaddr != NULL) {
 		err = move_addr_to_user(&addr,
 					msg_sys->msg_namelen, uaddr,
@@ -2197,13 +2282,14 @@ SYSCALL_DEFINE3(recvmsg, int, fd, struct msghdr __user *, msg,
 {
 	int fput_needed, err;
 	struct msghdr msg_sys;
+	/* 从文件描述符fd获得套接字 */	
 	struct socket *sock = sockfd_lookup_light(fd, &err, &fput_needed);
 
 	if (!sock)
 		goto out;
-
+	/* __sys_recvmsg用于实现接收数据 */
 	err = __sys_recvmsg(sock, msg, &msg_sys, flags, 0);
-
+	/* 释放fd引用（如果需要的话），这也是fput_light与fput的区别 */
 	fput_light(sock->file, fput_needed);
 out:
 	return err;

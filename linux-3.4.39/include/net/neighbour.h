@@ -91,30 +91,30 @@ struct neigh_statistics {
 #define NEIGH_CACHE_STAT_INC(tbl, field) this_cpu_inc((tbl)->stats->field)
 
 struct neighbour {
-	struct neighbour __rcu	*next;
-	struct neigh_table	*tbl;
-	struct neigh_parms	*parms;
-	unsigned long		confirmed;
-	unsigned long		updated;
-	rwlock_t		lock;
-	atomic_t		refcnt;
-	struct sk_buff_head	arp_queue;
-	unsigned int		arp_queue_len_bytes;
-	struct timer_list	timer;
-	unsigned long		used;
-	atomic_t		probes;
+	struct neighbour __rcu	*next;				//指向下一个邻居项
+	struct neigh_table	*tbl;					//邻居表
+	struct neigh_parms	*parms;					//邻居协议参数
+	unsigned long		confirmed;				//可到达性确认时间
+	unsigned long		updated;				//邻居状态更新时间
+	rwlock_t		lock;						//读写锁
+	atomic_t		refcnt;						//引用计数
+	struct sk_buff_head	arp_queue;				//发送缓存队列
+	unsigned int		arp_queue_len_bytes;	//发送缓存队列长度
+	struct timer_list	timer;					//邻居项定时器
+	unsigned long		used;					//使用时间标志位
+	atomic_t		probes;						//探测次数
 	__u8			flags;
-	__u8			nud_state;
-	__u8			type;
-	__u8			dead;
-	seqlock_t		ha_lock;
+	__u8			nud_state;					//邻居状态标志位
+	__u8			type;						//地址类型
+	__u8			dead;						//废弃标志位
+	seqlock_t		ha_lock;					//地址保护锁
 	unsigned char		ha[ALIGN(MAX_ADDR_LEN, sizeof(unsigned long))];
-	struct hh_cache		hh;
-	int			(*output)(struct neighbour *, struct sk_buff *);
-	const struct neigh_ops	*ops;
+	struct hh_cache		hh;						//L2帧头缓存
+	int			(*output)(struct neighbour *, struct sk_buff *);	//提供给L3的发送接口
+	const struct neigh_ops	*ops;				//虚拟函数表，随邻居状态变更
 	struct rcu_head		rcu;
-	struct net_device	*dev;
-	u8			primary_key[0];
+	struct net_device	*dev;					//设备
+	u8			primary_key[0];					//占位符，保存地址信息
 };
 
 struct neigh_ops {
@@ -150,34 +150,34 @@ struct neigh_hash_table {
 
 
 struct neigh_table {
-	struct neigh_table	*next;
-	int			family;
-	int			entry_size;
-	int			key_len;
-	__u32			(*hash)(const void *pkey,
+	struct neigh_table	*next;					//指向下一个邻居表
+	int			family;							//协议，AF_INET, AF_INET6
+	int			entry_size;						//邻居项大小
+	int			key_len;						//地址长度，IPv4是4字节，IPv6是16字节
+	__u32			(*hash)(const void *pkey,	//计算hash值的函数
 					const struct net_device *dev,
 					__u32 *hash_rnd);
-	int			(*constructor)(struct neighbour *);
-	int			(*pconstructor)(struct pneigh_entry *);
+	int			(*constructor)(struct neighbour *);		//邻居项构造函数
+	int			(*pconstructor)(struct pneigh_entry *);	//代理邻居项的构造函数
 	void			(*pdestructor)(struct pneigh_entry *);
 	void			(*proxy_redo)(struct sk_buff *skb);
-	char			*id;
-	struct neigh_parms	parms;
+	char			*id;						//邻居表ID
+	struct neigh_parms	parms;					//邻居表配置参数
 	/* HACK. gc_* should follow parms without a gap! */
-	int			gc_interval;
-	int			gc_thresh1;
+	int			gc_interval;					//gc回收时间
+	int			gc_thresh1;						//邻居表占用内存阈值
 	int			gc_thresh2;
 	int			gc_thresh3;
-	unsigned long		last_flush;
-	struct delayed_work	gc_work;
-	struct timer_list 	proxy_timer;
-	struct sk_buff_head	proxy_queue;
-	atomic_t		entries;
-	rwlock_t		lock;
+	unsigned long		last_flush;				//记录gc上一次清理时间
+	struct delayed_work	gc_work;				//gc任务队列
+	struct timer_list 	proxy_timer;			//代理功能定时器
+	struct sk_buff_head	proxy_queue;			//代理队列
+	atomic_t		entries;					//邻居项个数
+	rwlock_t		lock;						//读写锁
 	unsigned long		last_rand;
-	struct neigh_statistics	__percpu *stats;
-	struct neigh_hash_table __rcu *nht;
-	struct pneigh_entry	**phash_buckets;
+	struct neigh_statistics	__percpu *stats;	//统计信息
+	struct neigh_hash_table __rcu *nht;			//邻居项hash表
+	struct pneigh_entry	**phash_buckets;		//代理邻居项表
 };
 
 #define NEIGH_PRIV_ALIGN	sizeof(long long)
@@ -309,12 +309,17 @@ static inline void neigh_confirm(struct neighbour *neigh)
 		neigh->confirmed = jiffies;
 }
 
+//发送solicit请求
 static inline int neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 {
 	unsigned long now = jiffies;
-	
+
+	//更新时间戳
 	if (neigh->used != now)
 		neigh->used = now;
+
+	//检查邻居状态是否允许发送
+	//如果时connect状态或者时delay或者probe状态时没必要发送的
 	if (!(neigh->nud_state&(NUD_CONNECTED|NUD_DELAY|NUD_PROBE)))
 		return __neigh_event_send(neigh, skb);
 	return 0;
@@ -355,6 +360,9 @@ static inline int neigh_hh_output(struct hh_cache *hh, struct sk_buff *skb)
 static inline int neigh_output(struct neighbour *n, struct sk_buff *skb)
 {
 	struct hh_cache *hh = &n->hh;
+	//如果存在L2帧头缓存的话，直接填充MAC地址，然后调用dev_queue_xmit发送
+	//否则就只能调用邻居项的默认发送接口output，这是个函数指针，会随着邻居
+	//项状态的变化而变更
 	if ((n->nud_state & NUD_CONNECTED) && hh->hh_len)
 		return neigh_hh_output(hh, skb);
 	else

@@ -1119,6 +1119,7 @@ static int slow_chain_length(const struct rtable *head)
 	return length >> FRACT_BITS;
 }
 
+//查找邻居缓存，找不到则新建
 static struct neighbour *ipv4_neigh_lookup(const struct dst_entry *dst, const void *daddr)
 {
 	static const __be32 inaddr_any = 0;
@@ -1134,14 +1135,18 @@ static struct neighbour *ipv4_neigh_lookup(const struct dst_entry *dst, const vo
 	else if (rt->rt_gateway)
 		pkey = (const __be32 *) &rt->rt_gateway;
 
+	//邻居缓存查找成功则返回该邻居缓存
 	n = __ipv4_neigh_lookup(dev, *(__force u32 *)pkey);
 	if (n)
 		return n;
+
+	//邻居缓存查找失败则新建一个	
 	return neigh_create(&arp_tbl, pkey, dev);
 }
 
 static int rt_bind_neighbour(struct rtable *rt)
 {
+	//查找邻居缓存
 	struct neighbour *n = ipv4_neigh_lookup(&rt->dst, &rt->rt_gateway);
 	if (IS_ERR(n))
 		return PTR_ERR(n);
@@ -1150,6 +1155,7 @@ static int rt_bind_neighbour(struct rtable *rt)
 	return 0;
 }
 
+//添加到路由缓存里
 static struct rtable *rt_intern_hash(unsigned hash, struct rtable *rt,
 				     struct sk_buff *skb, int ifindex)
 {
@@ -1186,6 +1192,8 @@ restart:
 
 		rt->dst.flags |= DST_NOCACHE;
 		if (rt->rt_type == RTN_UNICAST || rt_is_output_route(rt)) {
+
+			//邻居缓存失败的话整个出口路由查找就返回失败了
 			int err = rt_bind_neighbour(rt);
 			if (err) {
 				if (net_ratelimit())
@@ -1281,6 +1289,7 @@ restart:
 	   route or unicast forwarding path.
 	 */
 	if (rt->rt_type == RTN_UNICAST || rt_is_output_route(rt)) {
+		//出口路由需要绑定邻居表
 		int err = rt_bind_neighbour(rt);
 		if (err) {
 			spin_unlock_bh(rt_hash_lock_addr(hash));
@@ -2773,8 +2782,10 @@ static struct rtable *ip_route_output_slow(struct net *net, struct flowi4 *fl4)
 		goto make_route;
 	}
 
+	//查找路由表
 	if (fib_lookup(net, fl4, &res)) {
 		res.fi = NULL;
+		//如果出口设备已知的话，查找失败也没啥
 		if (fl4->flowi4_oif) {
 			/* Apparently, routing tables are wrong. Assume,
 			   that the destination is on link.
@@ -2843,6 +2854,7 @@ make_route:
 
 		hash = rt_hash(orig_daddr, orig_saddr, orig_oif,
 			       rt_genid(dev_net(dev_out)));
+		//加入到路由缓存	       
 		rth = rt_intern_hash(hash, rth, NULL, orig_oif);
 	}
 

@@ -281,7 +281,7 @@ static inline int inet_netns_ok(struct net *net, int protocol)
 /*
  *	Create an inet socket.
  */
-
+//创建inet socket
 static int inet_create(struct net *net, struct socket *sock, int protocol,
 		       int kern)
 {
@@ -481,14 +481,24 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	int err;
 
 	/* If the socket has its own bind function then use it. (RAW) */
+	/*
+		如果具体协议实现了bind函数，则调用协议的bind函数。
+		AF_INET协议族中，只有IPPROTO_ICMP和IPPROTO_IP实现了自己的bind函数，
+		IPPROTO_TCP和IPPROTO_UDP都使用AF_INET通用的函数，即
+		这个inet_bind。	 
+	*/ 
 	if (sk->sk_prot->bind) {
 		err = sk->sk_prot->bind(sk, uaddr, addr_len);
 		goto out;
 	}
 	err = -EINVAL;
+	/* 检查地址长度 */
 	if (addr_len < sizeof(struct sockaddr_in))
 		goto out;
 
+	/* 本来要求地址的协议族要与sock相同，必须为AF_INET，但是这里有个兼容性问题。
+		允许协议族为AF_UNSPEC并且地址为INADDR_ANY的任意地址 
+	*/ 
 	if (addr->sin_family != AF_INET) {
 		/* Compatibility games : accept AF_UNSPEC (mapped to AF_INET)
 		 * only if s_addr is INADDR_ANY.
@@ -499,6 +509,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 			goto out;
 	}
 
+	/* 判断地址类型 */
 	chk_addr_ret = inet_addr_type(sock_net(sk), addr->sin_addr.s_addr);
 
 	/* Not specified by any standard per-se, however it breaks too
@@ -508,6 +519,11 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	 * (ie. your servers still start up even if your ISDN link
 	 *  is temporarily down)
 	 */
+	/*
+        sysctl_ip_nonlocal_bind系统控制开关，允许bind非本地IP; inet->freebind为一个
+        socket选项，允许该socket bind任意IP；在上面这些变量均不成立时，指定地址又不是任意的
+        本地地址INADDR_ANY，地址类型又不是本地地址类型，多播或广播时，则bind失败。
+    */        
 	err = -EADDRNOTAVAIL;
 	if (!sysctl_ip_nonlocal_bind &&
 	    !(inet->freebind || inet->transparent) &&
@@ -519,6 +535,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 
 	snum = ntohs(addr->sin_port);
 	err = -EACCES;
+	/* 如果源端口小于PROT_SOCK(1024)，则需要检查用户是否有权限创建知名端口*/
 	if (snum && snum < PROT_SOCK && !capable(CAP_NET_BIND_SERVICE))
 		goto out;
 
@@ -533,27 +550,44 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 
 	/* Check these errors (active socket, double bind). */
 	err = -EINVAL;
+	/* 确保套接字不会被bind两次 */
 	if (sk->sk_state != TCP_CLOSE || inet->inet_num)
 		goto out_release_sock;
 
+	/* 使用参数设置套接字的接收和发送地址 */
 	inet->inet_rcv_saddr = inet->inet_saddr = addr->sin_addr.s_addr;
+
+	/* 如果参数地址是多播或广播类型，则重置发送源地址为0，表示在发送时，使用的是设备地址 */
 	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
 		inet->inet_saddr = 0;  /* Use device */
 
 	/* Make sure we are allowed to bind here. */
+	/*  调用协议自定义的操作函数get_port，判断该端口是否可以使用。    虽然这里是一个查询的动作，
+		但是却会有修改的动作。    当该端口可以使用时，会让inet_sk(sk)->inet_num = snum;    这样做，是因为
+		查询动作已经获得了锁。在确定可以使用该端口时，直接修    改inet_num，这样既可以保证设置端口的
+		原子性，同时还可以提高性能    
+	*/
 	if (sk->sk_prot->get_port(sk, snum)) {
 		inet->inet_saddr = inet->inet_rcv_saddr = 0;
 		err = -EADDRINUSE;
 		goto out_release_sock;
 	}
 
+	/* 如果设置了bind地址，则置上相应的标志 */ 
 	if (inet->inet_rcv_saddr)
 		sk->sk_userlocks |= SOCK_BINDADDR_LOCK;
+
+	/* 如果设置了源端口，则设置相应的标志 */
 	if (snum)
 		sk->sk_userlocks |= SOCK_BINDPORT_LOCK;
+
+	/* 设置inet_sport，其为网络序 */	
 	inet->inet_sport = htons(inet->inet_num);
+	/* 重置目的地址和端口 */
 	inet->inet_daddr = 0;
 	inet->inet_dport = 0;
+
+	/* 重置该套接字的路由信息 */
 	sk_dst_reset(sk);
 	err = 0;
 out_release_sock:
@@ -568,13 +602,19 @@ int inet_dgram_connect(struct socket *sock, struct sockaddr * uaddr,
 {
 	struct sock *sk = sock->sk;
 
+	/* 长度合法性检查 */
 	if (addr_len < sizeof(uaddr->sa_family))
 		return -EINVAL;
+
+	/* 如果协议族为AF_UNSPEC，则先执行disconnect */ 
 	if (uaddr->sa_family == AF_UNSPEC)
 		return sk->sk_prot->disconnect(sk, flags);
 
+	/* 如果该套接字没有指定源端口，并且系统自动绑定端口失败，则返回错误 */
 	if (!inet_sk(sk)->inet_num && inet_autobind(sk))
 		return -EAGAIN;
+
+	/* 调用具体协议的connect实现函数 */	
 	return sk->sk_prot->connect(sk, (struct sockaddr *)uaddr, addr_len);
 }
 EXPORT_SYMBOL(inet_dgram_connect);

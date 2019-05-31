@@ -137,19 +137,19 @@ struct socket_wq {
  *  @wq: wait queue for several uses
  */
 struct socket {
-	socket_state		state;
+	socket_state		state;	//套接字状态，可选值包括未连接，正在连接，连接，正在断开等
 
 	kmemcheck_bitfield_begin(type);
-	short			type;
+	short			type;	//套接字类型，常见的有stream, datagram, raw socket
 	kmemcheck_bitfield_end(type);
 
-	unsigned long		flags;
+	unsigned long		flags;	//标志位
 
-	struct socket_wq __rcu	*wq;
+	struct socket_wq __rcu	*wq;	//等待队列
 
-	struct file		*file;
-	struct sock		*sk;
-	const struct proto_ops	*ops;
+	struct file		*file;	//文件描述符
+	struct sock		*sk;	//套接字的网络层表示
+	const struct proto_ops	*ops;	//套接字的操作函数集
 };
 
 struct vm_area_struct;

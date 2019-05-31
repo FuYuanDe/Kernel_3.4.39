@@ -206,7 +206,9 @@ static inline int ip_finish_output2(struct sk_buff *skb)
 
 	rcu_read_lock();
 	neigh = dst_get_neighbour_noref(dst);
+	//如果不存在邻居表项的话，返回发送失败
 	if (neigh) {
+		//调用邻居层提供的发送接口
 		int res = neigh_output(neigh, skb);
 
 		rcu_read_unlock();
